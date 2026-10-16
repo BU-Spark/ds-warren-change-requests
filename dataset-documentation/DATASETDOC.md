@@ -81,3 +81,9 @@
 
 * Is there any other additional information that you would like to provide that has not already been covered in other sections?
 
+Data access: Client datasets, source PDFs, meeting notes, and detailed source-data findings are excluded from Git. See `data/README.MD` for the required local filenames and setup.
+
+Schema note: The source's second Reg/OT/DT group has no group label. The cleaning notebook uses neutral names `reg_rate`, `ot_rate`, and `dt_rate`; approval is determined from the separate `status` field. The unlabeled premium column has a tentative interpretation that requires client confirmation.
+
+Cleaning documentation: `data_for_analysis/data_cleaning.ipynb` preserves source row references, standardizes types and reviewed spelling variations, and exports the full cleaned tracker and condensed reference into `data/`. Detailed record-level findings belong in the ignored `data/data_quality_notes.md` or restricted shared drive.
+
