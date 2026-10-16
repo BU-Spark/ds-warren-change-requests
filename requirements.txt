@@ -1,0 +1,6 @@
+# Tabular data loading, cleaning, validation, and CSV export
+pandas
+
+# Interactive notebook environment and project-specific Python kernel
+jupyterlab
+ipykernel
