@@ -1,3 +1,7 @@
+# Dataset documentation template
+
+For semester wrap-up, copy this file within this directory and name the copy `DATASETDOC-[season][year].md`. Use `sp`, `fa`, or `sum` for the season and a two-digit year, for example `DATASETDOC-fa26.md`. Answer the questions below in that copy. Keep private drive links, client contacts, and confidential dataset details in restricted local documentation rather than GitHub.
+
 ***Project Information*** 
 
 * What is the project name?  

@@ -4,3 +4,10 @@ pandas
 # Interactive notebook environment and project-specific Python kernel
 jupyterlab
 ipykernel
+
+# Local printed-table ingestion (Tesseract itself is installed separately)
+PyMuPDF>=1.26,<2
+streamlit>=1.41,<2
+Pillow>=11,<13
+pytesseract>=0.3.13,<0.4
+filelock>=3.16,<4

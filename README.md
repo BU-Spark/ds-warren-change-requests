@@ -6,10 +6,12 @@ An AI-assisted review project for Boston University construction change requests
 
 - `data/`: local source and generated CSV datasets; only its `README.MD` is committed.
 - `data_for_analysis/data_cleaning.ipynb`: step-by-step cleaning, schema normalization, and verified CSV exports.
-- `data_for_analysis/Data_Analysis.MD`: overview of the analysis workflow.
 - `brandsafway_data/brandsafway_analytics.ipynb`: starter notebook for the next PDF analysis phase.
-- `dataset-documentation/DATASETDOC.md`: general dataset documentation.
+- `ocr_ingestion/`: local printed-table extraction, review interface, storage, and evaluation tools; see its [README](ocr_ingestion/README.md).
+- `tests/`: synthetic extraction, storage, and interface regression tests with shared document builders.
+- `dataset-documentation/DATASETDOC.md`: course dataset-documentation template and semester wrap-up instructions.
 - `requirements.txt`: notebook and data-processing dependencies.
+- `requirements-dev.txt`: runtime dependencies plus pytest for development.
 
 See [data/README.MD](data/README.MD) for dataset names and local placement. Client datasets, PDFs, project instructions, meeting notes, and detailed source findings are excluded from Git. Obtain them through the restricted shared drive or the project maintainer; no private drive link is published here.
 
@@ -32,12 +34,20 @@ CSV files do not store Python types; use the schema in the notebook when reloadi
 
 The ignore rules exclude CSVs, PDFs, spreadsheet files, local data, client project notes, notebook checkpoints, and the virtual environment. Detailed client findings belong in the ignored `data/data_quality_notes.md` or restricted shared drive.
 
+Keep uploaded images, extracted JSON evidence, and evaluation reports inside `data/` as well. Local handoff files (`MEMORY.md` and `ocr_ingestion/INSTRUCTIONS.md`) stay on disk and are ignored because they contain private findings and temporary implementation history. Source code, synthetic tests, setup configuration, and public usage documentation belong in Git.
+
 Saved notebook outputs can contain sensitive records. Clear **all outputs**, execution counts, and sensitive metadata before staging a notebook, and review code and Markdown cells for embedded client values. Outputs will still display when running notebooks locally. Inspect the complete staged diff and file list before every commit; ignore rules alone do not inspect notebook content or protect files already tracked by Git.
 
 ## Cleaning decisions
 
 The full cleaned tracker retains source row references, original position spellings, context, and approval history. The condensed table keeps fields needed for contractor, classification, date, rate-type, and approval checks. Missing values and source date issues remain available for review. Reviewed spelling variations use Journey Person; any broader equivalence with Journeyman needs confirmation for the applicable contractor. Snapshot fields such as Current / Expired do not determine historical work-date validity.
 
+## Printed labor-table ingestion
+
+Run `python -m streamlit run ocr_ingestion/app.py` from the repository root with the `warren_towers` environment active. The local app accepts PDFs and images, previews original printed labor rates, and appends selected records to the ignored `data/document_line_items.csv`. It keeps the existing rate tracker separate. See [ocr_ingestion/README.md](ocr_ingestion/README.md) for OCR setup, review requirements, schema, and verification commands.
+
 ## Contribution workflow
+
+Install development dependencies with `python -m pip install -r requirements-dev.txt` and run `python -m pytest -q`. Tests generate synthetic documents in temporary directories; client data is not needed.
 
 Create working branches from `dev` and open pull requests targeting `dev`. Add the project PM and TPM as reviewers. Semester wrap-up changes merge from `dev` to `main`.

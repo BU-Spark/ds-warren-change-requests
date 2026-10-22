@@ -8,9 +8,15 @@ This directory holds client datasets locally. Its contents are ignored by Git ex
 | `cleaned_raw_labor_rates_tracker.csv` | Full cleaned tracker with source row numbers, original position names, context, and approval history. |
 | `labor_rates_fa.csv` | Condensed labor rates for analysis (FA), with contractor, position, effective dates, Reg/OT/DT rates, approval status, BU approval date, and source row number. |
 | `data_quality_notes.md` | Optional private source-record findings and unresolved issues; also ignored. |
+| `document_line_items.csv` | Accumulated printed-table rows explicitly reviewed and saved in the local app. |
+| `document_line_items_private/` | Saved source copies, evidence history, manifest, and append-recovery state for the accumulated dataset. |
+| `ocr_ingestion/uploads/` | Original uploaded PDFs and images, grouped by document content hash. |
+| `ocr_ingestion/evaluation/` | Private comparison reports and extracted candidate records; separate from accepted rows. |
 
 Place the original tracker here, then run `../data_for_analysis/data_cleaning.ipynb` to generate both cleaned CSVs. Their filenames remain unchanged. All source row references point to `Labor_rate_data.csv`.
 
 Store the local BrandSafway PDF at `../brandsafway_data/AD0015.04-BrandSafway.pdf` and client instructions at `../brandsafway_data/project_instructions.md`; both are excluded from Git. Request access or file copies from the project maintainer. The shared-drive location will be provided privately.
 
 The rate fields use neutral names `reg_rate`, `ot_rate`, and `dt_rate`; approval depends on the separate `status` field. Do not infer approval from the presence of a rate.
+
+The ingestion app creates its storage only as needed. See [the ingestion guide](../ocr_ingestion/README.md) for the schema and review workflow. Keep images, JSON evidence, screenshots, and reports here too; those formats are not globally ignored outside private directories.
