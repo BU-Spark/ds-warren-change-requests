@@ -71,7 +71,7 @@ def source_preview(path, page_number):
 
 def main():
     st.set_page_config(page_title="Printed table ingestion", layout="wide")
-    st.title("Printed table ingestion")
+    st.title("Printed labor table extraction")
     st.write("Upload a document, review its printed labor rates, and add selected rows to the shared local dataset.")
     st.caption("Local processing only. Handwriting and reviewer corrections are excluded. Rate validation is a later step.")
     upload_tab, data_tab = st.tabs(["Upload document", "View data"])
@@ -111,9 +111,13 @@ def view_data():
 
 
 def upload_document():
+    st.subheader("1. Upload a document")
     uploaded = st.file_uploader("Choose a PDF or image", type=["pdf", "png", "jpg", "jpeg", "tif", "tiff"])
-    contractor = st.text_input("Contractor (as printed on the source)", help="Provide the contractor explicitly; the program does not infer it from a filename or rates.")
-    project = st.text_input("Project name (required)", help="Enter the actual project name. It is saved in the project column for new rows.").strip()
+    contractor_column, project_column = st.columns(2)
+    with contractor_column:
+        contractor = st.text_input("Contractor (as printed on the source)", help="Provide the contractor explicitly; the program does not infer it from a filename or rates.")
+    with project_column:
+        project = st.text_input("Project name (required)", help="Enter the actual project name. It is saved in the project column for new rows.").strip()
     use_ocr = st.checkbox("Read scanned printed tables with local OCR", value=True,
                             help="Printed header detection skips handwritten backup forms. OCR-derived rows require review.")
     if uploaded is None:
@@ -150,7 +154,8 @@ def upload_document():
         st.info("Extract the newly selected document before reviewing its rows.")
         return
     source = st.session_state["source_path"]
-    st.subheader("Review tables")
+    st.subheader("2. Check extracted values against the source")
+    st.caption("Open a table below and select Show original page to check that the printed values were copied correctly.")
     st.write(f"{len(result.tables)} tables detected; {len(result.records)} structured rows extracted.")
     try:
         existing = load_records(CSV_PATH)
@@ -209,7 +214,7 @@ def upload_document():
         st.info("No usable labor rates found. Rows need an explicit rate and a printed description, classification, or worker name.")
         return
     rows.insert(0, "Add", ~rows["record_id"].isin(known_ids))
-    st.subheader("Select rows to add")
+    st.subheader("3. Select rows to save")
     st.caption("Only labor-rate rows are available to save. Blank optional cells are unknown values. Rates are not checked against the contract tracker here.")
     technical = st.checkbox("Show technical columns and full IDs", key="preview_technical")
     display = client_table(rows, technical=technical, known_ids=known_ids)
