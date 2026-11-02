@@ -1,5 +1,9 @@
 # PCI Review
 
+This branch extends the existing OCR pipeline with batch PDF processing and preliminary labor-rate, work-date, arithmetic, and missing-information checks. It was tested using the 18 newly supplied client PDFs and produces combined labor records and findings with source-document references.
+
+This is a development prototype intended for future UI integration. Accuracy has not yet been measured, and unresolved information requires reviewer confirmation. Client documents and generated results are not included in the repository.
+
 Batch extraction and preliminary labor-rate checks for ACME and BrandSafway change-request PDFs. Uses `ocr_ingestion` for extraction and adds support for BrandSafway Trade/Hrs/Rate/Cost tables.
 
 ## Setup
