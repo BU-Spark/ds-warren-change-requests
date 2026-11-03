@@ -18,7 +18,7 @@ test("upload, review, save, resolve and export exactly eight differences", async
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "A clearer path to confident review." }),
+    page.getByRole("heading", { name: "Upload & review" }),
   ).toBeVisible();
   await page
     .getByLabel("Choose document")
@@ -210,9 +210,7 @@ test("keyboard navigation and dialogs stay usable on small screens", async ({
   const nav = page.getByRole("navigation", { name: "Main navigation" });
   await nav.getByRole("button", { name: "Saved data", exact: true }).focus();
   await page.keyboard.press("Enter");
-  await expect(
-    page.getByRole("heading", { name: "Your labor data, in one place." }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Saved data" })).toBeVisible();
   await page
     .getByRole("button", { name: "Review", exact: true })
     .first()

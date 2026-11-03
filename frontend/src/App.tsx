@@ -58,19 +58,18 @@ const tabs: { id: Tab; name: string; icon: typeof FileText }[] = [
   { id: "differences", name: "Differences", icon: SlidersHorizontal },
 ];
 const titles = {
-  upload: "A clearer path to confident review.",
-  data: "Your labor data, in one place.",
-  checks: "Check the rates. See the evidence.",
-  differences: "Focus on what needs attention.",
+  upload: "Upload & review",
+  data: "Saved data",
+  checks: "Labor checks",
+  differences: "Differences",
 };
 const subtitles = {
-  upload:
-    "Upload a change request, review the printed labor rates, and save the rows you need.",
-  data: "Browse reviewed labor records and prepare them for comparison with your rate schedule.",
+  upload: "Upload a change request and review its extracted labor rates.",
+  data: "Search saved labor records or select records to check.",
   checks:
-    "Compare submitted labor rates with approved schedules for the dates the work occurred.",
+    "Compare document rates against approved rates for the contractor and work dates.",
   differences:
-    "Only confirmed rate differences appear here. Every finding links back to its source.",
+    "Review and export rates that differ from the applicable approved schedules.",
 };
 export default function App() {
   const [tab, setTabState] = useState<Tab>(
@@ -165,9 +164,7 @@ export default function App() {
       await task();
     } catch (e) {
       setError(
-        e instanceof Error
-          ? e.message
-          : "Something went wrong. Please try again.",
+        e instanceof Error ? e.message : "The request failed. Try again.",
       );
     } finally {
       setBusy(false);
@@ -462,8 +459,8 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="privacy-note">
             <ShieldCheck size={20} />
-            <strong>Private by design</strong>
-            <p>Your documents and data stay on this computer.</p>
+            <strong>Local storage</strong>
+            <p>Files are stored on this computer.</p>
           </div>
           <button
             className="sidebar-reference"
@@ -983,7 +980,7 @@ export default function App() {
                         <div className="card-heading">
                           <div>
                             <h2>Upload a change request</h2>
-                            <p>Start with the document you want to review.</p>
+                            <p>Select a PDF or image to extract labor rates.</p>
                           </div>
                           <span className="small-step">STEP 01</span>
                         </div>
@@ -1103,12 +1100,12 @@ export default function App() {
                           <h2>Instructions</h2>
                           {[
                             {
-                              title: "Upload your document",
-                              text: "Add the change request and identify the project and contractor.",
+                              title: "Upload document",
+                              text: "Choose a document and enter its project and contractor.",
                             },
                             {
                               title: "Review the printed values",
-                              text: "See extracted labor rates next to the original document.",
+                              text: "Compare the extracted values with the source page.",
                             },
                             {
                               title: "Check for differences",
@@ -1127,10 +1124,10 @@ export default function App() {
                         <section className="evidence-note">
                           <ShieldCheck size={22} />
                           <div>
-                            <h3>Evidence behind every finding</h3>
+                            <h3>Source documents</h3>
                             <p>
-                              Every rate stays linked to its source page. You
-                              stay in control of the final review.
+                              Open a result to view its source page and
+                              reference schedule.
                             </p>
                           </div>
                         </section>
@@ -1196,7 +1193,7 @@ export default function App() {
                     </>
                   ) : (
                     <Empty
-                      title="Your dataset starts here"
+                      title="No saved records"
                       action={
                         <button
                           className="primary"
@@ -1532,8 +1529,8 @@ export default function App() {
                       <Empty
                         title={
                           currentTab === "differences"
-                            ? "Differences will appear here"
-                            : "Ready for your first rate check"
+                            ? "No check results"
+                            : "No check results"
                         }
                         action={
                           <button
@@ -1561,9 +1558,9 @@ export default function App() {
           <footer className="page-footer">
             <span>
               <ShieldCheck size={14} />
-              Local processing · Human-reviewed decisions
+              Local application
             </span>
-            <span>Warren Towers / Labor review</span>
+            <span>Warren Towers</span>
           </footer>
         </main>
       </div>
