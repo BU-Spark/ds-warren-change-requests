@@ -1,13 +1,15 @@
 # Warren Towers: Contractor Change Request Validation
 
-An AI-assisted review project for Boston University construction change requests. The initial scope is to compare labor rates in contractor PDFs against schedules applicable to the work dates, check approval status, and show source evidence to a human reviewer.
+An AI-assisted review project for Boston University construction change requests. The local reviewer compares printed labor rates in contractor documents against approved schedules applicable to the work dates and shows source evidence to a human reviewer.
 
 ## Repository layout
 
 - `data/`: local source and generated CSV datasets; only its `README.MD` is committed.
 - `data_for_analysis/data_cleaning.ipynb`: step-by-step cleaning, schema normalization, and verified CSV exports.
 - `brandsafway_data/brandsafway_analytics.ipynb`: starter notebook for the next PDF analysis phase.
-- `ocr_ingestion/`: local printed-table extraction, review interface, storage, and evaluation tools; see its [README](ocr_ingestion/README.md).
+- `ocr_ingestion/`: printed-table extraction, protected CSV storage, and evaluation tools.
+- `reviewer/`: local FastAPI application, persistent review sessions, reference versions, and labor checker.
+- `frontend/`: React/TypeScript client interface; see the [reviewer guide](reviewer/README.md).
 - `tests/`: synthetic extraction, storage, and interface regression tests with shared document builders.
 - `dataset-documentation/DATASETDOC.md`: course dataset-documentation template and semester wrap-up instructions.
 - `requirements.txt`: notebook and data-processing dependencies.
@@ -40,11 +42,22 @@ Saved notebook outputs can contain sensitive records. Clear **all outputs**, exe
 
 ## Cleaning decisions
 
-The full cleaned tracker retains source row references, original position spellings, context, and approval history. The condensed table keeps fields needed for contractor, classification, date, rate-type, and approval checks. Missing values and source date issues remain available for review. Reviewed spelling variations use Journey Person; any broader equivalence with Journeyman needs confirmation for the applicable contractor. Snapshot fields such as Current / Expired do not determine historical work-date validity.
+The full cleaned tracker retains source row references, original position spellings, context, and approval history. The condensed table keeps fields needed for contractor, classification, date, rate-type, and approval checks. Missing values and source date issues remain available for review. Stored position spellings remain unchanged. The checker separately uses contractor-scoped spelling aliases, trade families and saved title relationships to retrieve applicable schedules. Snapshot fields such as Current / Expired do not determine historical work-date validity.
 
 ## Printed labor-table ingestion
 
-Run `python -m streamlit run ocr_ingestion/app.py` from the repository root with the `warren_towers` environment active. The local app accepts PDFs and images, previews original printed labor rates, and appends selected records to the ignored `data/document_line_items.csv`. It keeps the existing rate tracker separate. See [ocr_ingestion/README.md](ocr_ingestion/README.md) for OCR setup, review requirements, schema, and verification commands.
+With the Python environment active, build and start the reviewer:
+
+```bash
+python -m pip install -r requirements.txt
+npm --prefix frontend ci
+npm --prefix frontend run build
+python -m reviewer
+```
+
+Open **http://127.0.0.1:8000**. Use **Upload & review** to extract and save printed labor rates, **Saved data** to browse records, and **Labor checks** to compare them against the rate tracker. **Differences** shows and exports only confirmed rate differences. Matches and unresolved checks stay in Labor checks.
+
+Node.js 22+ is recommended for the frontend build; Node is not needed to run an already built UI. All document processing and storage remain local. See the [reviewer guide](reviewer/README.md) for reference updates, matching rules, and development/browser tests, and the [ingestion guide](ocr_ingestion/README.md) for OCR and the unchanged CSV schema.
 
 ## Contribution workflow
 

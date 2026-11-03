@@ -7,7 +7,12 @@ ipykernel
 
 # Local printed-table ingestion (Tesseract itself is installed separately)
 PyMuPDF>=1.26,<2
-streamlit>=1.41,<2
 Pillow>=11,<13
 pytesseract>=0.3.13,<0.4
 filelock>=3.16,<4
+
+# Local reviewer API
+fastapi>=0.115,<1
+pydantic>=2.9,<3
+uvicorn>=0.30,<1
+python-multipart>=0.0.18,<1

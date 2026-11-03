@@ -9,10 +9,17 @@ from tests.helpers import acme_lines, detail_lines, write_pdf
 
 def write_reference(path, count=1):
     row = {
-        "Document": "CD0123", "Type": "Labor", "Source Page": "1",
-        "ST Hours": "4", "OT Hours": "", "DT Hours": "",
-        "ST Rate": "10.00", "OT Rate": "15.00", "DT Rate": "20.00",
-        "Amount USD": "40.00", "Rate Basis": "Full rate",
+        "Document": "CD0123",
+        "Type": "Labor",
+        "Source Page": "1",
+        "ST Hours": "4",
+        "OT Hours": "",
+        "DT Hours": "",
+        "ST Rate": "10.00",
+        "OT Rate": "15.00",
+        "DT Rate": "20.00",
+        "Amount USD": "40.00",
+        "Rate Basis": "Full rate",
     }
     with path.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(row))

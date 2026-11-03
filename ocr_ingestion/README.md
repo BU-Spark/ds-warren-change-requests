@@ -1,6 +1,6 @@
 # Local printed labor-table ingestion
 
-Upload individual PDFs or images, inspect the original printed labor rates, and append selected records to a local CSV. Processing runs on your machine. No ZIP, API key, or cloud document service is needed. This program extracts submitted values; it does not approve requests or compare them with contractual rates yet.
+Upload individual PDFs or images, inspect the original printed labor rates, and append selected records to a local CSV. Processing runs on your machine. No ZIP, API key, or cloud document service is needed. The ingestion package preserves submitted values. The separate reviewer application compares them against approved reference schedules and leaves final decisions to a human reviewer.
 
 ## Start
 
@@ -9,12 +9,12 @@ From the repository root:
 ```bash
 source warren_towers/bin/activate
 python -m pip install -r requirements.txt
-python -m streamlit run ocr_ingestion/app.py
+npm --prefix frontend ci
+npm --prefix frontend run build
+python -m reviewer
 ```
 
-Open the local address printed by Streamlit. The repository configuration binds the app to `127.0.0.1` and disables usage telemetry. Do not expose this application as a public server: it has no authentication or multi-user access control.
-
-After editing Python modules, restart the Streamlit command if a browser refresh reports an import error. A refresh can retain modules from the running server process.
+Open **http://127.0.0.1:8000**. The server binds to loopback; this is a local application without accounts or shared hosting. Node.js 22+ is recommended to build the frontend. See the [reviewer guide](../reviewer/README.md) for development commands and the labor checker.
 
 Tesseract is a separate system dependency for scanned printed tables:
 
@@ -25,16 +25,16 @@ brew install tesseract
 sudo apt-get install tesseract-ocr
 ```
 
-Native text PDFs work with OCR disabled. The app reports missing Tesseract when OCR is needed. Supported inputs are PDF, PNG, JPEG, and multipage TIFF, up to 200 MB each. Password-protected PDFs must be unlocked before uploading.
+Document reading is automatic: selectable PDF text is extracted directly and scanned pages use local OCR when needed. The interface has no OCR checkbox or configuration section. The app reports missing Tesseract when OCR is needed. Supported inputs are PDF, PNG, JPEG, and multipage TIFF, up to 200 MB each. Password-protected PDFs must be unlocked before uploading.
 
 ## Review and add rows
 
-1. Upload a file. Enter the contractor as printed on the source and the required project name. The program does not derive the contractor or actual project name from a filename or rate match. The filename prefix before the first `-` appears separately as **Project ID (filename)**, a display label rather than a verified project number.
-2. Click **Extract tables**. Changing metadata afterwards requires extracting again.
+1. Upload a file. Enter the required contractor as printed on the source and project name. The program does not derive the contractor or actual project name from a filename or rate match. The filename prefix before the first `-` appears separately as **Project ID (filename)**, a display label rather than a verified project number.
+2. Click **Extract labor rates**. Changing metadata afterwards requires extracting again.
 3. Review detected labor tables and source pages. Only rows with an explicit hourly rate and a printed description, classification, or worker name are offered for saving. Totals, summaries, and supporting-cost tables are excluded.
 4. For unfamiliar labor tables, map the printed columns, including a rate and a source label. Description/total-only tables and rows without usable rates are ignored. Mapping does not imply that the data has been validated. Blank optional cells remain unknown. Source classifications and descriptions are preserved.
 5. Explicitly confirm tables that used OCR, manual mapping, unresolved cells, or overlay filtering. Compare them against the original printed cells and exclude handwriting or reviewer corrections.
-6. Select individual rows and click **Add to dataset**. Already-saved record IDs are skipped; you can add more rows from the same document later.
+6. Select individual rows and click **Save selected rows**. Already-saved record IDs are skipped; you can add more rows from the same document later.
 
 The app does not extract handwritten tickets or use handwritten dates. Scanned pages must have separated column headings and aligned labor-rate data rows to produce a review table. Notes, empty headers, totals-only pages, and scattered keywords do not qualify. Known scanned layouts use their normal parser; an unfamiliar layout is offered for mapping only when it contains a usable rate and source label. Ruled headings can use an additional sparse-text OCR pass to recover section labels. Local OCR is not proof that every detected word is printed; obscured or unparseable rates are omitted rather than invented.
 
@@ -44,7 +44,7 @@ Native PDF annotations are omitted from previews. Flattened annotations are page
 
 ## View saved data
 
-Click **View data** to browse usable labor-rate rows from `data/document_line_items.csv` inside the local interface, even without uploading a document. Search across columns or click **Refresh data** to reload changes saved by another session. This read-only view preserves original values and hides legacy non-labor or unusable rows without deleting them. Extraction previews are not included until you click **Add to dataset**.
+Click **Saved data** to browse usable labor-rate rows from `data/document_line_items.csv` inside the local interface, even without uploading a document. Search across columns or click **Refresh workspace** to reload changes saved by another session. This read-only view preserves original values and hides legacy non-labor or unusable rows without deleting them. Extraction previews are not included until you click **Save selected rows**.
 
 The default client view uses readable column labels, hides empty layout-specific columns, and shortens record IDs to 12 characters (extended if prefixes collide). **Show technical columns and full IDs** restores the complete raw view. Full identifiers remain unchanged in storage and drive duplicate protection. Descriptions appear when provided by the printed table; worker-detail tables may instead contain classification and worker-name columns. Project names are required for new extractions; older rows are not backfilled or rewritten.
 
@@ -72,7 +72,7 @@ Blank BrandSafway template rows with preprinted rates but no submitted hours or 
 
 Handwritten work dates and reference-derived premiums are intentionally absent from extraction. The rate-reference file `data/labor_rates_fa.csv` is never modified.
 
-Uploads stay under `data/ocr_ingestion/uploads/`. Saved source copies, evidence history, the manifest, and the recovery journal live under `data/document_line_items_private/`. File locking serializes writers. The CSV is physically appended; the recovery journal records its pre-append byte length. A write interrupted before the atomic manifest commit is rolled back on the next read/append. Existing incompatible CSV schemas are rejected. Changed documents have new hashes and remain separate versions.
+New UI uploads and persistent review sessions stay under `data/reviewer/`. Legacy uploads under `data/ocr_ingestion/uploads/` remain untouched. Saved source copies, evidence history, the manifest, and the recovery journal live under `data/document_line_items_private/`. File locking serializes writers. The CSV is physically appended; the recovery journal records its pre-append byte length. A write interrupted before the atomic manifest commit is rolled back on the next read/append. Existing incompatible CSV schemas are rejected. Changed documents have new hashes and remain separate versions.
 
 All these data artifacts are private and ignored by Git. The downloaded JSON evidence contains client data and must also remain private.
 

@@ -67,3 +67,9 @@ $RECYCLE.BIN/
 /MEMORY.md
 /ocr_ingestion/INSTRUCTIONS.md
 /DS539_BrandSafway_Data_Preparation_Pipeline.ipynb
+
+# Reviewer frontend dependencies and browser reports
+node_modules/
+playwright-report/
+test-results/
+*.tsbuildinfo
