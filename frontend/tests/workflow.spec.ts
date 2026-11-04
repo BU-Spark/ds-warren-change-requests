@@ -530,3 +530,130 @@ test("initial load selects a fresh replacement for obsolete rules while preservi
   ).toBeEnabled();
   await page.unrouteAll({ behavior: "wait" });
 });
+
+test("uploads and reviews remain navigable without losing active documents", async ({
+  page,
+  request,
+}) => {
+  const originalCount = (await (await request.get("/api/records")).json())
+    .records.length;
+  await page.goto("/");
+  await page
+    .getByLabel("Choose document")
+    .setInputFiles(path.join(fixtures, "needs-review.pdf"));
+  await page.getByLabel("Project name").fill("Navigation project");
+  await page.getByLabel(/^Contractor/).fill("Navigation contractor");
+  const posted = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname === "/api/sessions" &&
+      r.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Extract labor rates" }).click();
+  const first = await (await posted).json();
+  const ready = page.waitForResponse(
+    async (r) =>
+      new URL(r.url()).pathname === `/api/sessions/${first.id}` &&
+      r.request().method() === "GET" &&
+      (await r.json()).status === "ready",
+  );
+  await page.getByRole("tab", { name: "Upload document", exact: true }).click();
+  await page
+    .getByLabel("Choose document")
+    .setInputFiles(path.join(fixtures, "worker-detail.pdf"));
+  await page.getByLabel("Project name").fill("Second project");
+  await page.getByLabel(/^Contractor/).fill("Second contractor");
+  await ready;
+  await expect(
+    page.getByRole("heading", { name: "Upload a change request" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Project name")).toHaveValue("Second project");
+  await page.getByRole("tab", { name: /Documents in review/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "needs-review.pdf" }),
+  ).toBeVisible();
+  await page.locator(".review-check input").first().check();
+  await expect(
+    page.getByText("2 need attention", { exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("Source page").selectOption("3");
+  await page
+    .getByRole("checkbox", { name: /Select record/ })
+    .first()
+    .uncheck();
+  await expect(
+    page.getByText("7 rows selected", { exact: true }),
+  ).toBeVisible();
+  await page.locator(".steps").getByRole("button").nth(0).click();
+  await expect(
+    page.getByRole("tab", { name: "Upload document", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("heading", { name: "worker-detail.pdf" }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Upload document", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    page.getByRole("tab", { name: /Documents in review/ }),
+  ).toBeFocused();
+  await expect(page.getByLabel("Source page")).toHaveValue("3");
+  await expect(
+    page.getByText("7 rows selected", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Upload document", exact: true }).click();
+  await page.getByRole("button", { name: "Extract labor rates" }).click();
+  await expect(
+    page.getByRole("heading", { name: "worker-detail.pdf" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Printed labor rates" }),
+  ).toBeVisible();
+  await page
+    .locator(".recent-list")
+    .getByRole("button")
+    .filter({ hasText: "needs-review.pdf" })
+    .filter({ hasText: "Navigation contractor" })
+    .click();
+  await expect(page.getByLabel("Source page")).toHaveValue("3");
+  await expect(
+    page.getByText("7 rows selected", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("2 need attention", { exact: true }),
+  ).toBeVisible();
+  await page.locator(".steps").getByRole("button").nth(2).click();
+  await expect(
+    page.locator(".steps").getByRole("button").nth(2),
+  ).toHaveAttribute("aria-current", "step");
+  await expect(
+    page.getByRole("region", { name: "Save and check document" }),
+  ).toBeFocused();
+  expect(
+    (await (await request.get("/api/records")).json()).records.length,
+  ).toBe(originalCount);
+  await page.getByRole("button", { name: "Saved data", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Upload document", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Upload a change request" }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Upload a change request" }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: /Documents in review/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "needs-review.pdf" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("2 need attention", { exact: true }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 900 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  await page.screenshot({
+    path: "test-results/document-workflow-mobile.png",
+    fullPage: true,
+  });
+});

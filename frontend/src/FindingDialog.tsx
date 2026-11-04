@@ -138,7 +138,7 @@ export default function FindingDialog({
               <p className="notice">
                 Reviewer-supplied details were used for this check:{" "}
                 {Object.entries(finding.review_details)
-                  .filter(([, v]) => v)
+                  .filter(([key, value]) => key !== "rate_basis_raw" && value)
                   .map(([k, v]) => `${k.replaceAll("_", " ")}: ${v}`)
                   .join(" · ")}
               </p>
@@ -148,7 +148,7 @@ export default function FindingDialog({
         {previewRow && (
           <dl className="record-details">
             {Object.entries(previewRow)
-              .filter(([, v]) => v)
+              .filter(([key, value]) => key !== "rate_basis_raw" && value)
               .map(([k, v]) => (
                 <div key={k}>
                   <dt>{labels[k] || k.replaceAll("_", " ")}</dt>

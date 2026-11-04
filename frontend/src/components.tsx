@@ -128,7 +128,6 @@ export function RowsTable({
     "reg_rate",
     "ot_rate",
     "dt_rate",
-    "rate_basis_raw",
     "document_reference",
     "ticket_id",
     "source_file",
@@ -145,7 +144,7 @@ export function RowsTable({
     return id.slice(0, n);
   };
   const fields = technical
-    ? Object.keys(rows[0] || {})
+    ? Object.keys(rows[0] || {}).filter((field) => field !== "rate_basis_raw")
     : base.filter(
         (f) =>
           [
@@ -236,7 +235,7 @@ export function RowsTable({
                           .replace(/\.[^.]+$/, "")
                           .split("-")[0]
                           .trim()
-                      : f.includes("rate") && f !== "rate_basis_raw"
+                      : f.includes("rate")
                         ? money(
                             !technical && f === "reg_rate"
                               ? r.reg_rate || r.rate
@@ -272,7 +271,6 @@ const mappingChoices = [
   "dt_rate",
   "work_start",
   "work_end",
-  "rate_basis_raw",
   "ticket_id",
   "document_reference",
 ];

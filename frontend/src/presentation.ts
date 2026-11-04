@@ -20,7 +20,6 @@ export const labels: Record<string, string> = {
   ot_hours: "OT hours",
   dt_hours: "DT hours",
   hours: "Hours",
-  rate_basis_raw: "Rate wording",
 };
 export const formatDate = (date: string) =>
   new Date(date).toLocaleString(undefined, {

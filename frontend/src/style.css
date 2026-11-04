@@ -2248,3 +2248,56 @@ summary {
     font-size: 16px;
   }
 }
+
+.document-workflow-nav {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 24px;
+}
+.document-workflow-nav > button {
+  padding: 12px 16px;
+  background: transparent;
+  color: #64758b;
+  font-size: 12px;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.document-workflow-nav > button[aria-selected="true"] {
+  color: #203b5c;
+  border-bottom-color: #355f85;
+  font-weight: 600;
+}
+.document-workflow-nav span {
+  background: #e9eef4;
+  color: #536c89;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+}
+.steps > .step {
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+}
+.steps > .step:hover:not(:disabled) strong {
+  text-decoration: underline;
+}
+.retry-upload {
+  margin: 0 20px 20px;
+}
+.save-bar:focus-visible {
+  outline: 2px solid #6d8eaf;
+  outline-offset: 3px;
+}
+@media (max-width: 680px) {
+  .document-workflow-nav > button {
+    padding: 11px 9px;
+    font-size: 11px;
+    gap: 6px;
+  }
+}

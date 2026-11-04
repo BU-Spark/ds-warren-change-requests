@@ -1,3 +1,4 @@
+import DocumentWorkflowNav, { type DocumentView } from "./DocumentWorkflowNav";
 import ReferenceDialog from "./ReferenceDialog";
 import FindingDialog from "./FindingDialog";
 import ComparisonDetailsDialog from "./ComparisonDetailsDialog";
@@ -83,6 +84,35 @@ export default function App() {
     [details, setDetails] = useState<Record<string, Row>>({}),
     [sessions, setSessions] = useState<Session[]>([]),
     [session, setSession] = useState<Session | null>(null);
+  const [documentView, setDocumentViewState] = useState<DocumentView>(() => {
+    const saved = localStorage.getItem("warren-document-view");
+    return saved === "upload" || saved === "review"
+      ? saved
+      : localStorage.getItem("warren-session")
+        ? "review"
+        : "upload";
+  });
+  const [processStep, setProcessStep] = useState(
+    documentView === "upload" ? 0 : 1,
+  );
+  const setDocumentView = (view: DocumentView) => {
+    setDocumentViewState(view);
+    setProcessStep(view === "upload" ? 0 : 1);
+    localStorage.setItem("warren-document-view", view);
+  };
+  const openUpload = () => {
+    setTab("upload");
+    setDocumentView("upload");
+  };
+  const reviewDrafts = useRef(
+    new Map<
+      string,
+      { revision: number; page: number; selected: string[]; target: string }
+    >(),
+  );
+  const [reviewDestination, setReviewDestination] = useState<
+    "checklist" | "save" | null
+  >(null);
   const [reference, setReference] = useState<Reference | null>(null),
     [runs, setRuns] = useState<Run[]>([]),
     [runId, setRunId] = useState(localStorage.getItem("warren-run") || "");
@@ -120,6 +150,19 @@ export default function App() {
     element?.focus({ preventScroll: true });
     element?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [page, targetTable]);
+  useEffect(() => {
+    if (documentView !== "review" || !reviewDestination) return;
+    const element = document.getElementById(
+      reviewDestination === "save"
+        ? "document-save-actions"
+        : "review-checklist",
+    );
+    if (element) {
+      element.focus({ preventScroll: true });
+      element.scrollIntoView({ block: "start", behavior: "smooth" });
+      setReviewDestination(null);
+    }
+  }, [documentView, reviewDestination, session?.status]);
   const [classificationMap, setClassificationMap] =
     useState<ClassificationGraph | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
@@ -171,24 +214,40 @@ export default function App() {
     }
   };
   const adoptSession = (next: Session, openReview = false) => {
+    if (session?.extraction)
+      reviewDrafts.current.set(session.id, {
+        revision: session.revision,
+        page,
+        selected: [...previewSelection],
+        target: targetTable,
+      });
+    const draft = reviewDrafts.current.get(next.id);
+    const restore = draft?.revision === next.revision ? draft : undefined;
     setSession(next);
     localStorage.setItem("warren-session", next.id);
     setReviewed(next.reviewed || {});
-    setTargetTable("");
+    setTargetTable(restore?.target || "");
+    const available = new Set(
+      (next.extraction?.records || [])
+        .filter((r) => !next.saved_ids?.includes(r.record_id))
+        .map((r) => r.record_id),
+    );
     setPreviewSelection(
       new Set(
-        (next.extraction?.records || [])
-          .filter((r) => !next.saved_ids?.includes(r.record_id))
-          .map((r) => r.record_id),
+        restore
+          ? restore.selected.filter((id) => available.has(id))
+          : [...available],
       ),
     );
     setPage(
-      next.review_summary?.items.find(
-        (i) => i.status === "mapping" || i.status === "needs_review",
-      )?.page ||
+      restore?.page ||
+        next.review_summary?.items.find(
+          (i) => i.status === "mapping" || i.status === "needs_review",
+        )?.page ||
         next.extraction?.tables[0]?.page ||
         1,
     );
+    if (openReview) setDocumentView("review");
     if (openReview)
       requestAnimationFrame(() => {
         const checklist = document.getElementById("review-checklist");
@@ -224,7 +283,7 @@ export default function App() {
           .then((next) => {
             if (alive) {
               if (next.status === "ready") {
-                adoptSession(next, true);
+                adoptSession(next, documentView === "review");
                 load().catch((e) => setError(e.message));
               } else setSession(next);
             }
@@ -238,7 +297,30 @@ export default function App() {
       alive = false;
       clearInterval(id);
     };
-  }, [session?.id, session?.status]);
+  }, [session?.id, session?.status, documentView]);
+  const hasProcessingDocuments = sessions.some((document) =>
+    ["queued", "processing"].includes(document.status),
+  );
+  useEffect(() => {
+    if (!loaded || currentTab !== "upload" || documentView !== "review") return;
+    let active = true;
+    const refreshDocuments = () =>
+      api<Session[]>("/sessions")
+        .then((documents) => {
+          if (active) setSessions(documents);
+        })
+        .catch((error) => {
+          if (active) setError(error.message);
+        });
+    void refreshDocuments();
+    const timer = hasProcessingDocuments
+      ? setInterval(refreshDocuments, 2000)
+      : undefined;
+    return () => {
+      active = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [loaded, currentTab, documentView, hasProcessingDocuments]);
   useEffect(() => {
     setSearch("");
     setContractorFilter("");
@@ -255,7 +337,8 @@ export default function App() {
         method: "POST",
         body: form,
       });
-      adoptSession(next);
+      adoptSession(next, true);
+      setFile(null);
       await load();
     });
   const confirmTable = (tableId: string, checked: boolean) =>
@@ -509,8 +592,8 @@ export default function App() {
               <h1>{titles[currentTab]}</h1>
               <p>{subtitles[currentTab]}</p>
             </div>
-            {currentTab !== "upload" && (
-              <button className="primary" onClick={() => setTab("upload")}>
+            {(currentTab !== "upload" || documentView === "review") && (
+              <button className="primary" disabled={busy} onClick={openUpload}>
                 <Plus size={17} />
                 Upload document
               </button>
@@ -551,589 +634,649 @@ export default function App() {
             <>
               {currentTab === "upload" && (
                 <>
-                  {sessions.length > 0 && (
-                    <section className="card recent">
-                      <div className="card-heading">
-                        <div>
-                          <h2>Documents to review</h2>
-                          <p>
-                            Documents needing attention appear first. Select one
-                            to continue its review.
-                          </p>
-                        </div>
-                        <span className="muted">
-                          {sessions.length} documents
-                        </span>
-                      </div>
-                      <label className="review-filter">
-                        <input
-                          type="checkbox"
-                          checked={attentionOnly}
-                          onChange={(e) => setAttentionOnly(e.target.checked)}
-                        />
-                        Show only documents needing attention (
-                        {
-                          sessions.filter((s) =>
-                            needsAttention(s.review_summary?.status),
-                          ).length
-                        }
-                        )
-                      </label>
-                      {attentionOnly &&
-                        !sessions.some((s) =>
-                          needsAttention(s.review_summary?.status),
-                        ) && (
-                          <p className="review-clear">
-                            No documents need additional source review.
-                          </p>
-                        )}
-                      <div className="recent-list">
-                        {[...sessions]
-                          .sort(
-                            (a, b) =>
-                              Number(needsAttention(b.review_summary?.status)) -
-                              Number(needsAttention(a.review_summary?.status)),
-                          )
-                          .filter(
-                            (s) =>
-                              !attentionOnly ||
-                              needsAttention(s.review_summary?.status),
-                          )
-                          .map((s) => (
-                            <button
-                              key={s.id}
-                              onClick={() =>
-                                act(async () =>
-                                  adoptSession(
-                                    await api<Session>(`/sessions/${s.id}`),
-                                    true,
-                                  ),
-                                )
-                              }
-                            >
-                              <span className="document-icon">
-                                <FileText size={20} />
-                              </span>
-                              <span className="recent-name">
-                                <strong>{s.filename}</strong>
-                                <small>
-                                  {s.contractor} · {formatDate(s.created_at)}
-                                </small>
-                              </span>
-                              <Pill
-                                tone={
-                                  needsAttention(s.review_summary?.status)
-                                    ? "warn"
-                                    : s.review_summary?.status === "saved"
-                                      ? "good"
-                                      : s.status === "failed"
-                                        ? "bad"
-                                        : "neutral"
-                                }
-                              >
-                                {reviewLabel(s.review_summary)}
-                              </Pill>
-                              <ChevronRight size={17} />
-                            </button>
-                          ))}
-                      </div>
-                    </section>
-                  )}
-                  <div className="steps" aria-label="Document review steps">
-                    {[
-                      "Upload document",
-                      "Review extracted rates",
-                      "Save & check",
-                    ].map((name, i) => (
-                      <div
-                        key={name}
-                        className={
-                          (i === 0 && !session?.extraction) ||
-                          (i === 1 && session?.extraction)
-                            ? "step current"
-                            : "step"
-                        }
-                      >
-                        <span>{i + 1}</span>
-                        <div>
-                          <strong>{name}</strong>
-                          <small>
-                            {
-                              [
-                                "PDF or printed image",
-                                "Verify against the source",
-                                "Compare approved schedules",
-                              ][i]
-                            }
-                          </small>
-                        </div>
-                        {i < 2 && <ChevronRight size={17} />}
-                      </div>
-                    ))}
-                  </div>
-                  {session &&
-                  ["processing", "queued"].includes(session.status) ? (
-                    <section className="card">
-                      <div className="processing">
-                        <LoaderCircle className="spin" size={32} />
-                        <h2>Reading your document</h2>
-                        <p>{session.filename}</p>
-                        <progress
-                          max={session.total_pages || 1}
-                          value={session.page}
-                        />
-                        <span>
-                          {session.total_pages
-                            ? `Processing page ${session.page} of ${session.total_pages}`
-                            : "Waiting to begin…"}
-                        </span>
-                        <small>
-                          You can switch tabs while the document is processed.
-                        </small>
-                      </div>
-                    </section>
-                  ) : session?.status === "ready" && session.extraction ? (
-                    <>
-                      <section className="document-banner">
-                        <div className="document-icon">
-                          <FileText />
-                        </div>
-                        <div>
-                          <h3>{session.filename}</h3>
-                          <p>
-                            {session.project} <span>·</span>{" "}
-                            {session.contractor} <span>·</span>{" "}
-                            {session.extraction.records.length} extracted rows
-                          </p>
-                        </div>
-                        <Pill
-                          tone={
-                            needsAttention(session.review_summary?.status)
-                              ? "warn"
-                              : "good"
-                          }
-                        >
-                          {reviewLabel(session.review_summary)}
-                        </Pill>
-                        <button
-                          className="secondary"
-                          onClick={() => {
-                            setSession(null);
-                            localStorage.removeItem("warren-session");
-                          }}
-                        >
-                          Upload another
-                        </button>
-                      </section>
-                      {session.extraction.pages.some(
-                        (p) => p.status === "scan_not_processed",
-                      ) && (
-                        <div className="message warning">
-                          <Info size={20} />
-                          <span>
-                            Some pages were not processed in this earlier
-                            review. Upload the document again to retry.
-                          </span>
-                        </div>
-                      )}
-                      {session.review_summary && (
-                        <ReviewChecklist
-                          summary={session.review_summary}
-                          tableId={targetTable}
-                          page={page}
-                          onJump={jumpToTable}
-                          onPage={(n) => {
-                            setPage(n);
-                            setTargetTable("");
-                          }}
-                        />
-                      )}
-                      <div className="review-layout">
-                        <section className="card source-card">
-                          <div className="card-heading">
-                            <h2>Original document</h2>
-                            <select
-                              aria-label="Source page"
-                              value={page}
-                              onChange={(e) => {
-                                setPage(Number(e.target.value));
-                                setTargetTable("");
-                              }}
-                            >
-                              {session.extraction.pages.map((p, i) => (
-                                <option key={i} value={Number(p.page)}>
-                                  Page {String(p.page)}
-                                  {session.review_summary?.items.some(
-                                    (i) =>
-                                      i.page === Number(p.page) &&
-                                      (i.status === "mapping" ||
-                                        i.status === "needs_review"),
-                                  )
-                                    ? " · Needs review"
-                                    : ""}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <Source
-                            url={`/api/sessions/${session.id}/pages/${page}`}
-                          />
-                        </section>
-                        <section className="card extracted-card">
-                          <div className="card-heading">
-                            <div>
-                              <h2>Printed labor rates</h2>
-                              <p>
-                                Compare each value with the source before
-                                saving.
-                              </p>
-                            </div>
-                            <Pill>{previewRows.length} rows</Pill>
-                          </div>
-                          {activeTable.map((table) => (
-                            <div
-                              key={table.table_id}
-                              id={`review-table-${table.table_id}`}
-                              role="group"
-                              aria-label={`Review table on page ${table.page}`}
-                              tabIndex={-1}
-                              className={`table-review ${targetTable === table.table_id ? "target-table" : ""}`}
-                            >
-                              <div className="table-review-heading">
-                                <strong>
-                                  Page {table.page} ·{" "}
-                                  {table.kind === "unfamiliar"
-                                    ? "Column mapping"
-                                    : table.kind === "labor_detail"
-                                      ? "Worker detail"
-                                      : table.kind === "labor_tally"
-                                        ? "Labor tally"
-                                        : "Labor rates"}
-                                </strong>
-                                {table.requires_review && (
-                                  <Pill tone="warn">Review required</Pill>
-                                )}
-                              </div>
-                              {table.kind === "unfamiliar" && (
-                                <>
-                                  <div className="table-scroll raw-table">
-                                    <table>
-                                      <thead>
-                                        <tr>
-                                          {table.headers.map((h, i) => (
-                                            <th key={i}>{h}</th>
-                                          ))}
-                                        </tr>
-                                      </thead>
-                                      <tbody>
-                                        {table.rows
-                                          .slice(0, 10)
-                                          .map((row, i) => (
-                                            <tr key={i}>
-                                              {row.map((c, j) => (
-                                                <td key={j}>{c}</td>
-                                              ))}
-                                            </tr>
-                                          ))}
-                                      </tbody>
-                                    </table>
-                                  </div>
-                                  <Mapping
-                                    table={table}
-                                    disabled={busy}
-                                    onApply={(columns) =>
-                                      act(async () => {
-                                        const next = await api<Session>(
-                                          `/sessions/${session.id}/tables/${table.table_id}`,
-                                          json("PUT", {
-                                            revision: session.revision,
-                                            columns,
-                                          }),
-                                        );
-                                        adoptSession(next);
-                                      })
-                                    }
-                                  />
-                                </>
-                              )}
-                              {table.requires_review && (
-                                <label className="review-check">
-                                  <input
-                                    type="checkbox"
-                                    checked={
-                                      reviewed[table.table_id] ===
-                                      session.review_tokens?.[table.table_id]
-                                    }
-                                    disabled={busy}
-                                    onChange={(e) =>
-                                      confirmTable(
-                                        table.table_id,
-                                        e.target.checked,
-                                      )
-                                    }
-                                  />
-                                  <span>
-                                    I checked the original printed table.
-                                    Selected rows exclude handwriting and
-                                    corrections.
-                                  </span>
-                                </label>
-                              )}
-                            </div>
-                          ))}
-                          {previewRows.length ? (
-                            <RowsTable
-                              rows={previewRows}
-                              selected={previewSelection}
-                              onSelect={setPreviewSelection}
-                              technical={technical}
-                              knownIds={rows.map((r) => r.record_id)}
-                            />
-                          ) : (
-                            <Empty title="No ready rows on this page">
-                              Choose another page, map a detected table, or
-                              upload a clearer printed document.
-                            </Empty>
-                          )}
-                          <label className="technical">
-                            <input
-                              type="checkbox"
-                              checked={technical}
-                              onChange={(e) => setTechnical(e.target.checked)}
-                            />
-                            Show technical columns and full IDs
-                          </label>
-                          <details className="extraction-notes">
-                            <summary>Extraction notes & skipped pages</summary>
-                            <pre>
-                              {JSON.stringify(
-                                {
-                                  issues: session.extraction.issues,
-                                  pages: session.extraction.pages,
-                                },
-                                null,
-                                2,
-                              )}
-                            </pre>
-                          </details>
-                        </section>
-                      </div>
-                      <div className="save-bar">
-                        <div>
-                          <strong>{previewSelection.size} rows selected</strong>
-                          <p>
-                            {requiresReview
-                              ? "Confirm the required source reviews before saving."
-                              : "Previously saved rows are skipped automatically."}
-                          </p>
-                        </div>
-                        <a
-                          className="secondary"
-                          href={`/api/sessions/${session.id}/evidence`}
-                          download
-                        >
-                          <ArrowDownToLine size={16} />
-                          Evidence
-                        </a>
-                        <button
-                          className="primary"
-                          disabled={
-                            busy || !previewSelection.size || requiresReview
-                          }
-                          onClick={saveRows}
-                        >
-                          {busy ? (
-                            <LoaderCircle size={17} className="spin" />
-                          ) : (
-                            <Check size={17} />
-                          )}
-                          Save selected rows
-                        </button>
-                        <button
-                          className="secondary"
-                          disabled={
-                            busy ||
-                            !session.saved_ids?.some((id) =>
-                              session.extraction?.records.some(
-                                (r) => r.record_id === id,
-                              ),
-                            )
-                          }
-                          onClick={() =>
-                            runCheck(
-                              session
-                                .extraction!.records.filter((r) =>
-                                  session.saved_ids?.includes(r.record_id),
-                                )
-                                .map((r) => r.record_id),
-                            )
-                          }
-                        >
-                          Check saved document
-                          <ArrowRight size={16} />
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="upload-layout">
-                      <section className="card upload-card">
+                  <DocumentWorkflowNav
+                    view={documentView}
+                    count={sessions.length}
+                    busy={busy}
+                    onChange={setDocumentView}
+                  />
+                  <section
+                    id="document-workflow-panel"
+                    role="tabpanel"
+                    aria-labelledby={`document-tab-${documentView}`}
+                  >
+                    {documentView === "review" && sessions.length > 0 && (
+                      <section className="card recent">
                         <div className="card-heading">
                           <div>
-                            <h2>Upload a change request</h2>
-                            <p>Select a PDF or image to extract labor rates.</p>
+                            <h2>Documents to review</h2>
+                            <p>
+                              Documents needing attention appear first. Select
+                              one to continue its review.
+                            </p>
                           </div>
-                          <span className="small-step">STEP 01</span>
+                          <span className="muted">
+                            {sessions.length} documents
+                          </span>
                         </div>
-                        {session?.status === "failed" && (
-                          <div className="message error" role="alert">
-                            <AlertCircle size={20} />
-                            <span>{session.error}</span>
+                        <label className="review-filter">
+                          <input
+                            type="checkbox"
+                            checked={attentionOnly}
+                            onChange={(e) => setAttentionOnly(e.target.checked)}
+                          />
+                          Show only documents needing attention (
+                          {
+                            sessions.filter((s) =>
+                              needsAttention(s.review_summary?.status),
+                            ).length
+                          }
+                          )
+                        </label>
+                        {attentionOnly &&
+                          !sessions.some((s) =>
+                            needsAttention(s.review_summary?.status),
+                          ) && (
+                            <p className="review-clear">
+                              No documents need additional source review.
+                            </p>
+                          )}
+                        <div className="recent-list">
+                          {[...sessions]
+                            .sort(
+                              (a, b) =>
+                                Number(
+                                  needsAttention(b.review_summary?.status),
+                                ) -
+                                Number(
+                                  needsAttention(a.review_summary?.status),
+                                ),
+                            )
+                            .filter(
+                              (s) =>
+                                !attentionOnly ||
+                                needsAttention(s.review_summary?.status),
+                            )
+                            .map((s) => (
+                              <button
+                                key={s.id}
+                                disabled={busy}
+                                onClick={() =>
+                                  act(async () =>
+                                    adoptSession(
+                                      await api<Session>(`/sessions/${s.id}`),
+                                      true,
+                                    ),
+                                  )
+                                }
+                              >
+                                <span className="document-icon">
+                                  <FileText size={20} />
+                                </span>
+                                <span className="recent-name">
+                                  <strong>{s.filename}</strong>
+                                  <small>
+                                    {s.contractor} · {formatDate(s.created_at)}
+                                  </small>
+                                </span>
+                                <Pill
+                                  tone={
+                                    needsAttention(s.review_summary?.status)
+                                      ? "warn"
+                                      : s.review_summary?.status === "saved"
+                                        ? "good"
+                                        : s.status === "failed"
+                                          ? "bad"
+                                          : "neutral"
+                                  }
+                                >
+                                  {reviewLabel(s.review_summary)}
+                                </Pill>
+                                <ChevronRight size={17} />
+                              </button>
+                            ))}
+                        </div>
+                      </section>
+                    )}
+                    <div className="steps" aria-label="Document review steps">
+                      {[
+                        "Upload document",
+                        "Review extracted rates",
+                        "Save & check",
+                      ].map((name, i) => (
+                        <button
+                          type="button"
+                          key={name}
+                          disabled={busy || (i === 2 && !session?.extraction)}
+                          aria-current={i === processStep ? "step" : undefined}
+                          onClick={() => {
+                            setDocumentView(i === 0 ? "upload" : "review");
+                            setProcessStep(i);
+                            setReviewDestination(
+                              i === 2 ? "save" : i === 1 ? "checklist" : null,
+                            );
+                          }}
+                          className={
+                            i === processStep ? "step current" : "step"
+                          }
+                        >
+                          <span>{i + 1}</span>
+                          <div>
+                            <strong>{name}</strong>
+                            <small>
+                              {
+                                [
+                                  "PDF or printed image",
+                                  "Verify against the source",
+                                  "Compare approved schedules",
+                                ][i]
+                              }
+                            </small>
+                          </div>
+                          {i < 2 && <ChevronRight size={17} />}
+                        </button>
+                      ))}
+                    </div>
+                    {documentView === "review" && !session ? (
+                      <section className="card">
+                        <Empty title="Select a document">
+                          Choose a document from the list to continue reviewing,
+                          or open Upload document to add a file.
+                        </Empty>
+                      </section>
+                    ) : documentView === "review" &&
+                      session?.status === "failed" ? (
+                      <section className="card">
+                        <div className="message error" role="alert">
+                          <AlertCircle size={20} />
+                          <span>{session.error}</span>
+                        </div>
+                        <button
+                          className="secondary retry-upload"
+                          onClick={openUpload}
+                        >
+                          Upload document again
+                        </button>
+                      </section>
+                    ) : documentView === "review" &&
+                      session &&
+                      ["processing", "queued"].includes(session.status) ? (
+                      <section className="card">
+                        <div className="processing">
+                          <LoaderCircle className="spin" size={32} />
+                          <h2>Reading your document</h2>
+                          <p>{session.filename}</p>
+                          <progress
+                            max={session.total_pages || 1}
+                            value={session.page}
+                          />
+                          <span>
+                            {session.total_pages
+                              ? `Processing page ${session.page} of ${session.total_pages}`
+                              : "Waiting to begin…"}
+                          </span>
+                          <small>
+                            You can switch tabs while the document is processed.
+                          </small>
+                        </div>
+                      </section>
+                    ) : documentView === "review" &&
+                      session?.status === "ready" &&
+                      session.extraction ? (
+                      <>
+                        <section className="document-banner">
+                          <div className="document-icon">
+                            <FileText />
+                          </div>
+                          <div>
+                            <h3>{session.filename}</h3>
+                            <p>
+                              {session.project} <span>·</span>{" "}
+                              {session.contractor} <span>·</span>{" "}
+                              {session.extraction.records.length} extracted rows
+                            </p>
+                          </div>
+                          <Pill
+                            tone={
+                              needsAttention(session.review_summary?.status)
+                                ? "warn"
+                                : "good"
+                            }
+                          >
+                            {reviewLabel(session.review_summary)}
+                          </Pill>
+                          <button className="secondary" onClick={openUpload}>
+                            Upload another
+                          </button>
+                        </section>
+                        {session.extraction.pages.some(
+                          (p) => p.status === "scan_not_processed",
+                        ) && (
+                          <div className="message warning">
+                            <Info size={20} />
+                            <span>
+                              Some pages were not processed in this earlier
+                              review. Upload the document again to retry.
+                            </span>
                           </div>
                         )}
-                        <form
-                          onSubmit={(e) => {
-                            e.preventDefault();
-                            startUpload();
-                          }}
+                        {session.review_summary && (
+                          <ReviewChecklist
+                            summary={session.review_summary}
+                            tableId={targetTable}
+                            page={page}
+                            onJump={jumpToTable}
+                            onPage={(n) => {
+                              setPage(n);
+                              setTargetTable("");
+                            }}
+                          />
+                        )}
+                        <div className="review-layout">
+                          <section className="card source-card">
+                            <div className="card-heading">
+                              <h2>Original document</h2>
+                              <select
+                                aria-label="Source page"
+                                value={page}
+                                onChange={(e) => {
+                                  setPage(Number(e.target.value));
+                                  setTargetTable("");
+                                }}
+                              >
+                                {session.extraction.pages.map((p, i) => (
+                                  <option key={i} value={Number(p.page)}>
+                                    Page {String(p.page)}
+                                    {session.review_summary?.items.some(
+                                      (i) =>
+                                        i.page === Number(p.page) &&
+                                        (i.status === "mapping" ||
+                                          i.status === "needs_review"),
+                                    )
+                                      ? " · Needs review"
+                                      : ""}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <Source
+                              url={`/api/sessions/${session.id}/pages/${page}`}
+                            />
+                          </section>
+                          <section className="card extracted-card">
+                            <div className="card-heading">
+                              <div>
+                                <h2>Printed labor rates</h2>
+                                <p>
+                                  Compare each value with the source before
+                                  saving.
+                                </p>
+                              </div>
+                              <Pill>{previewRows.length} rows</Pill>
+                            </div>
+                            {activeTable.map((table) => (
+                              <div
+                                key={table.table_id}
+                                id={`review-table-${table.table_id}`}
+                                role="group"
+                                aria-label={`Review table on page ${table.page}`}
+                                tabIndex={-1}
+                                className={`table-review ${targetTable === table.table_id ? "target-table" : ""}`}
+                              >
+                                <div className="table-review-heading">
+                                  <strong>
+                                    Page {table.page} ·{" "}
+                                    {table.kind === "unfamiliar"
+                                      ? "Column mapping"
+                                      : table.kind === "labor_detail"
+                                        ? "Worker detail"
+                                        : table.kind === "labor_tally"
+                                          ? "Labor tally"
+                                          : "Labor rates"}
+                                  </strong>
+                                  {table.requires_review && (
+                                    <Pill tone="warn">Review required</Pill>
+                                  )}
+                                </div>
+                                {table.kind === "unfamiliar" && (
+                                  <>
+                                    <div className="table-scroll raw-table">
+                                      <table>
+                                        <thead>
+                                          <tr>
+                                            {table.headers.map((h, i) => (
+                                              <th key={i}>{h}</th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {table.rows
+                                            .slice(0, 10)
+                                            .map((row, i) => (
+                                              <tr key={i}>
+                                                {row.map((c, j) => (
+                                                  <td key={j}>{c}</td>
+                                                ))}
+                                              </tr>
+                                            ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                    <Mapping
+                                      table={table}
+                                      disabled={busy}
+                                      onApply={(columns) =>
+                                        act(async () => {
+                                          const next = await api<Session>(
+                                            `/sessions/${session.id}/tables/${table.table_id}`,
+                                            json("PUT", {
+                                              revision: session.revision,
+                                              columns,
+                                            }),
+                                          );
+                                          adoptSession(next);
+                                        })
+                                      }
+                                    />
+                                  </>
+                                )}
+                                {table.requires_review && (
+                                  <label className="review-check">
+                                    <input
+                                      type="checkbox"
+                                      checked={
+                                        reviewed[table.table_id] ===
+                                        session.review_tokens?.[table.table_id]
+                                      }
+                                      disabled={busy}
+                                      onChange={(e) =>
+                                        confirmTable(
+                                          table.table_id,
+                                          e.target.checked,
+                                        )
+                                      }
+                                    />
+                                    <span>
+                                      I checked the original printed table.
+                                      Selected rows exclude handwriting and
+                                      corrections.
+                                    </span>
+                                  </label>
+                                )}
+                              </div>
+                            ))}
+                            {previewRows.length ? (
+                              <RowsTable
+                                rows={previewRows}
+                                selected={previewSelection}
+                                onSelect={setPreviewSelection}
+                                technical={technical}
+                                knownIds={rows.map((r) => r.record_id)}
+                              />
+                            ) : (
+                              <Empty title="No ready rows on this page">
+                                Choose another page, map a detected table, or
+                                upload a clearer printed document.
+                              </Empty>
+                            )}
+                            <label className="technical">
+                              <input
+                                type="checkbox"
+                                checked={technical}
+                                onChange={(e) => setTechnical(e.target.checked)}
+                              />
+                              Show technical columns and full IDs
+                            </label>
+                            <details className="extraction-notes">
+                              <summary>
+                                Extraction notes & skipped pages
+                              </summary>
+                              <pre>
+                                {JSON.stringify(
+                                  {
+                                    issues: session.extraction.issues,
+                                    pages: session.extraction.pages,
+                                  },
+                                  null,
+                                  2,
+                                )}
+                              </pre>
+                            </details>
+                          </section>
+                        </div>
+                        <div
+                          className="save-bar"
+                          id="document-save-actions"
+                          tabIndex={-1}
+                          role="region"
+                          aria-label="Save and check document"
                         >
-                          <div
-                            className={`drop-zone ${file ? "has-file" : ""}`}
-                            onDragOver={(e) => e.preventDefault()}
-                            onDrop={(e) => {
+                          <div>
+                            <strong>
+                              {previewSelection.size} rows selected
+                            </strong>
+                            <p>
+                              {requiresReview
+                                ? "Confirm the required source reviews before saving."
+                                : "Previously saved rows are skipped automatically."}
+                            </p>
+                          </div>
+                          <a
+                            className="secondary"
+                            href={`/api/sessions/${session.id}/evidence`}
+                            download
+                          >
+                            <ArrowDownToLine size={16} />
+                            Evidence
+                          </a>
+                          <button
+                            className="primary"
+                            disabled={
+                              busy || !previewSelection.size || requiresReview
+                            }
+                            onClick={saveRows}
+                          >
+                            {busy ? (
+                              <LoaderCircle size={17} className="spin" />
+                            ) : (
+                              <Check size={17} />
+                            )}
+                            Save selected rows
+                          </button>
+                          <button
+                            className="secondary"
+                            disabled={
+                              busy ||
+                              !session.saved_ids?.some((id) =>
+                                session.extraction?.records.some(
+                                  (r) => r.record_id === id,
+                                ),
+                              )
+                            }
+                            onClick={() =>
+                              runCheck(
+                                session
+                                  .extraction!.records.filter((r) =>
+                                    session.saved_ids?.includes(r.record_id),
+                                  )
+                                  .map((r) => r.record_id),
+                              )
+                            }
+                          >
+                            Check saved document
+                            <ArrowRight size={16} />
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="upload-layout">
+                        <section className="card upload-card">
+                          <div className="card-heading">
+                            <div>
+                              <h2>Upload a change request</h2>
+                              <p>
+                                Select a PDF or image to extract labor rates.
+                              </p>
+                            </div>
+                            <span className="small-step">STEP 01</span>
+                          </div>
+                          {session?.status === "failed" && (
+                            <div className="message error" role="alert">
+                              <AlertCircle size={20} />
+                              <span>{session.error}</span>
+                            </div>
+                          )}
+                          <form
+                            onSubmit={(e) => {
                               e.preventDefault();
-                              setFile(e.dataTransfer.files[0] || null);
+                              startUpload();
                             }}
                           >
-                            <div className="upload-icon">
-                              {file ? (
-                                <FileCheck2 size={30} />
-                              ) : (
-                                <UploadCloud size={30} />
-                              )}
-                            </div>
-                            <h3>
-                              {file ? file.name : "Drop your document here"}
-                            </h3>
-                            <p>
-                              {file
-                                ? `${(file.size / 1024 / 1024).toFixed(1)} MB · Ready to extract`
-                                : "or choose a file from your computer"}
-                            </p>
-                            <button
-                              type="button"
-                              className="secondary"
-                              onClick={() => uploadRef.current?.click()}
+                            <div
+                              className={`drop-zone ${file ? "has-file" : ""}`}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setFile(e.dataTransfer.files[0] || null);
+                              }}
                             >
-                              {file ? "Choose another file" : "Browse files"}
-                              <ArrowUpRight size={15} />
-                            </button>
-                            <input
-                              ref={uploadRef}
-                              aria-label="Choose document"
-                              type="file"
-                              accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff"
-                              onChange={(e) =>
-                                setFile(e.target.files?.[0] || null)
-                              }
-                              className="sr-only"
-                            />
-                            <small>PDF, PNG, JPG or TIFF · Up to 200 MB</small>
-                          </div>
-                          <div className="form-grid">
-                            <label>
-                              Project name <span className="required">*</span>
+                              <div className="upload-icon">
+                                {file ? (
+                                  <FileCheck2 size={30} />
+                                ) : (
+                                  <UploadCloud size={30} />
+                                )}
+                              </div>
+                              <h3>
+                                {file ? file.name : "Drop your document here"}
+                              </h3>
+                              <p>
+                                {file
+                                  ? `${(file.size / 1024 / 1024).toFixed(1)} MB · Ready to extract`
+                                  : "or choose a file from your computer"}
+                              </p>
+                              <button
+                                type="button"
+                                className="secondary"
+                                onClick={() => uploadRef.current?.click()}
+                              >
+                                {file ? "Choose another file" : "Browse files"}
+                                <ArrowUpRight size={15} />
+                              </button>
                               <input
-                                required
-                                maxLength={300}
-                                value={project}
-                                onChange={(e) => setProject(e.target.value)}
-                                placeholder="e.g. Warren Towers"
+                                ref={uploadRef}
+                                aria-label="Choose document"
+                                type="file"
+                                accept=".pdf,.png,.jpg,.jpeg,.tif,.tiff"
+                                onChange={(e) =>
+                                  setFile(e.target.files?.[0] || null)
+                                }
+                                className="sr-only"
                               />
                               <small>
-                                The project this request belongs to.
+                                PDF, PNG, JPG or TIFF · Up to 200 MB
                               </small>
-                            </label>
-                            <label>
-                              Contractor <span className="required">*</span>
-                              <input
-                                required
-                                maxLength={300}
-                                value={contractor}
-                                onChange={(e) => setContractor(e.target.value)}
-                                placeholder="Contractor as printed"
-                                list="contractor-names"
-                              />
-                              <small>Use the name shown on the document.</small>
-                            </label>
-                          </div>
-                          <div className="form-footer">
-                            <span>
-                              <ShieldCheck size={15} />
-                              Processed on this computer
-                            </span>
-                            <button
-                              className="primary"
-                              type="submit"
-                              disabled={
-                                busy ||
-                                !file ||
-                                !project.trim() ||
-                                !contractor.trim()
-                              }
-                            >
-                              {busy ? (
-                                <LoaderCircle size={17} className="spin" />
-                              ) : (
-                                <FileSearch size={17} />
-                              )}
-                              Extract labor rates
-                              <ArrowRight size={16} />
-                            </button>
-                          </div>
-                        </form>
-                      </section>
-                      <aside className="guide-column">
-                        <section className="card guide-card">
-                          <div className="guide-symbol">
-                            <ClipboardCheck size={23} />
-                          </div>
-                          <h2>Instructions</h2>
-                          {[
-                            {
-                              title: "Upload document",
-                              text: "Choose a document and enter its project and contractor.",
-                            },
-                            {
-                              title: "Review the printed values",
-                              text: "Compare the extracted values with the source page.",
-                            },
-                            {
-                              title: "Check for differences",
-                              text: "Compare saved rates with the applicable approved schedule.",
-                            },
-                          ].map((s, i) => (
-                            <div className="guide-step" key={s.title}>
-                              <span>{i + 1}</span>
-                              <div>
-                                <h3>{s.title}</h3>
-                                <p>{s.text}</p>
-                              </div>
                             </div>
-                          ))}
+                            <div className="form-grid">
+                              <label>
+                                Project name <span className="required">*</span>
+                                <input
+                                  required
+                                  maxLength={300}
+                                  value={project}
+                                  onChange={(e) => setProject(e.target.value)}
+                                  placeholder="e.g. Warren Towers"
+                                />
+                                <small>
+                                  The project this request belongs to.
+                                </small>
+                              </label>
+                              <label>
+                                Contractor <span className="required">*</span>
+                                <input
+                                  required
+                                  maxLength={300}
+                                  value={contractor}
+                                  onChange={(e) =>
+                                    setContractor(e.target.value)
+                                  }
+                                  placeholder="Contractor as printed"
+                                  list="contractor-names"
+                                />
+                                <small>
+                                  Use the name shown on the document.
+                                </small>
+                              </label>
+                            </div>
+                            <div className="form-footer">
+                              <span>
+                                <ShieldCheck size={15} />
+                                Processed on this computer
+                              </span>
+                              <button
+                                className="primary"
+                                type="submit"
+                                disabled={
+                                  busy ||
+                                  !file ||
+                                  !project.trim() ||
+                                  !contractor.trim()
+                                }
+                              >
+                                {busy ? (
+                                  <LoaderCircle size={17} className="spin" />
+                                ) : (
+                                  <FileSearch size={17} />
+                                )}
+                                Extract labor rates
+                                <ArrowRight size={16} />
+                              </button>
+                            </div>
+                          </form>
                         </section>
-                        <section className="evidence-note">
-                          <ShieldCheck size={22} />
-                          <div>
-                            <h3>Source documents</h3>
-                            <p>
-                              Open a result to view its source page and
-                              reference schedule.
-                            </p>
-                          </div>
-                        </section>
-                      </aside>
-                    </div>
-                  )}
+                        <aside className="guide-column">
+                          <section className="card guide-card">
+                            <div className="guide-symbol">
+                              <ClipboardCheck size={23} />
+                            </div>
+                            <h2>Instructions</h2>
+                            {[
+                              {
+                                title: "Upload document",
+                                text: "Choose a document and enter its project and contractor.",
+                              },
+                              {
+                                title: "Review the printed values",
+                                text: "Compare the extracted values with the source page.",
+                              },
+                              {
+                                title: "Check for differences",
+                                text: "Compare saved rates with the applicable approved schedule.",
+                              },
+                            ].map((s, i) => (
+                              <div className="guide-step" key={s.title}>
+                                <span>{i + 1}</span>
+                                <div>
+                                  <h3>{s.title}</h3>
+                                  <p>{s.text}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </section>
+                          <section className="evidence-note">
+                            <ShieldCheck size={22} />
+                            <div>
+                              <h3>Source documents</h3>
+                              <p>
+                                Open a result to view its source page and
+                                reference schedule.
+                              </p>
+                            </div>
+                          </section>
+                        </aside>
+                      </div>
+                    )}
+                  </section>
                 </>
               )}
               {currentTab === "data" && (
@@ -1195,10 +1338,7 @@ export default function App() {
                     <Empty
                       title="No saved records"
                       action={
-                        <button
-                          className="primary"
-                          onClick={() => setTab("upload")}
-                        >
+                        <button className="primary" onClick={openUpload}>
                           Upload a document
                           <ArrowRight size={16} />
                         </button>
