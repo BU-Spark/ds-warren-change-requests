@@ -29,6 +29,8 @@ The login screens can be previewed now. Real accounts, verification emails, and
 password resets require a configured Supabase project. See
 [Reviewer sign-in](AUTH_SETUP.md) for testing and Railway setup.
 
+[Download the login preview](warren-login-preview.html) and open the downloaded file in your browser to try the screens. No account is needed and no emails are sent.
+
 ## Review workflow
 
 1. **Upload & review:** Choose **Upload document**, add a PDF, PNG, JPEG, or TIFF, enter the project and contractor, and extract labor rates. Processing opens **Documents in review**. You can switch back to Upload document while processing continues. Documents are limited to 200 MB.
