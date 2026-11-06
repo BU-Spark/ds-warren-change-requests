@@ -18,6 +18,17 @@ Open **http://127.0.0.1:8000**. Build the frontend again after changing it. The 
 
 For frontend development, keep the Python server running and run `npm --prefix frontend run dev` in another terminal. Vite serves at http://127.0.0.1:5173 and proxies `/api` to the local backend.
 
+## Sign-in
+
+This branch adds the sign-in, sign-up, and password reset screens, along with
+the code to connect them to Supabase Auth. If you run the app locally using the
+steps above and leave the auth settings unset, it opens directly to the regular
+review workspace. You don't need an account to try the interface.
+
+The login screens can be previewed now. Real accounts, verification emails, and
+password resets require a configured Supabase project. See
+[Reviewer sign-in](AUTH_SETUP.md) for testing and Railway setup.
+
 ## Review workflow
 
 1. **Upload & review:** Choose **Upload document**, add a PDF, PNG, JPEG, or TIFF, enter the project and contractor, and extract labor rates. Processing opens **Documents in review**. You can switch back to Upload document while processing continues. Documents are limited to 200 MB.
@@ -78,7 +89,7 @@ Accepted rows remain in `data/document_line_items.csv` with the existing lock, a
 
 New originals are stored in `data/reviewer/uploads/`. `data/reviewer/reviewer.sqlite3` stores extraction sessions, immutable reference versions, active-reference selection, current comparison details, contractor-specific classification relationships, and immutable check-run snapshots. All are ignored by Git and stay local. Browser storage contains only tab/session/run identifiers. Refreshing or restarting preserves completed extraction and checks; interrupted jobs are marked failed and can be retried through reupload. A single extraction worker processes queued documents and exposes page progress.
 
-`WARREN_DATA_DIR` can point to another local data directory, useful for isolated demos/tests. It must contain any intended reference and accepted dataset; the default is the repository's `data/`. The server runs on 127.0.0.1:8000. No cloud APIs, external fonts, accounts, or public hosting are used. Original documents, extracted worker information, evidence, and exported findings are sensitive local artifacts.
+`WARREN_DATA_DIR` can point to another local data directory, useful for isolated demos/tests. It must contain any intended reference and accepted dataset; the default is the repository's `data/`. The local server runs on 127.0.0.1:8000. When sign-in is enabled, Supabase handles account authentication; document processing and storage stay on the reviewer server. Original documents, extracted worker information, evidence, and exported findings are sensitive local artifacts.
 
 ## Verification
 
