@@ -10,6 +10,7 @@ from decimal import Decimal, localcontext
 from ocr_ingestion.models import number
 
 from .matching import canonical, classification_candidates, resolve_contractor
+from .pay_basis import generic_basis, reference_value
 
 REFERENCE_FIELDS = [
     "source_csv_row_number",
@@ -23,7 +24,7 @@ REFERENCE_FIELDS = [
     "status",
     "bu_approval_received",
 ]
-CHECKER_VERSION = 3
+CHECKER_VERSION = 4
 RATE_TYPES = {"reg_rate": "REG", "ot_rate": "OT", "dt_rate": "DT"}
 EXPORT_FIELDS = [
     "finding_id",
@@ -60,6 +61,10 @@ EXPORT_FIELDS = [
     "matched_classifications",
     "approved_rates",
     "reference_rows",
+    "source_rate_field",
+    "pay_basis_evidence",
+    "context_evidence",
+    "conflicting_reference_rows",
 ]
 
 
@@ -157,17 +162,27 @@ def compare(
         candidates, method, trade = classification_candidates(
             contractor, classification, reference["rows"], aliases
         )
-        regular = record.get("reg_rate", "") or record.get("rate", "")
-        rates = [("REG", regular)] if regular != "" else []
+        rates = []
+        if record.get("reg_rate", "") != "":
+            rates.append(("REG", record["reg_rate"], "reg_rate", ""))
+        elif record.get("rate", "") != "":
+            basis, basis_reason = generic_basis(record, supplied)
+            rates.append((basis, record["rate"], "rate", basis_reason))
         rates.extend(
-            (kind, record.get(field, ""))
+            (kind, record[field], field, "")
             for field, kind in RATE_TYPES.items()
             if field != "reg_rate" and record.get(field, "") != ""
         )
-        for rate_index, (kind, submitted) in enumerate(rates):
-            rate_field = next(
-                field for field, label in RATE_TYPES.items() if label == kind
-            )
+        for rate_index, (kind, submitted, source_field, basis_reason) in enumerate(
+            rates
+        ):
+            rate_field = {
+                "REG": "reg_rate",
+                "OT": "ot_rate",
+                "DT": "dt_rate",
+                "OT_PREMIUM": "ot_rate - reg_rate",
+                "DT_PREMIUM": "dt_rate - reg_rate",
+            }.get(kind, "")
             result = {field: record.get(field, "") for field in EXPORT_FIELDS}
             result.update(
                 run_id=run_id,
@@ -181,6 +196,10 @@ def compare(
                 reference_version=reference["id"],
                 review_details=supplied,
                 reference_rate_field=rate_field,
+                source_rate_field=source_field,
+                pay_basis_evidence=supplied.get("pay_basis_evidence", ""),
+                context_evidence=supplied.get("context_evidence", ""),
+                conflicting_reference_rows=[],
                 outcome="needs_review",
                 finding_kind="needs_review",
                 reason="",
@@ -196,14 +215,14 @@ def compare(
             result["finding_id"] = hashlib.sha256(
                 f"{run_id}:{record['record_id']}:{rate_index}:{kind}".encode()
             ).hexdigest()
-            reason = ""
-            if not original_contractor:
-                reason = "Confirm the contractor before checking labor rates. You can apply it to all rows from this document."
-            elif not contractor:
+            reason = basis_reason
+            if not reason and not original_contractor:
+                reason = "Confirm the contractor for this source table before checking labor rates. Mixed-company documents need separate table details."
+            elif not reason and not contractor:
                 reason = "No schedule matches this contractor unambiguously. Confirm the contractor name."
-            elif not start or not end:
+            elif not reason and (not start or not end):
                 reason = "Confirm the dates when the work occurred."
-            else:
+            elif not reason:
                 try:
                     if (
                         date.fromisoformat(start).isoformat() != start
@@ -235,10 +254,15 @@ def compare(
             ]
             conflicts = {}
             for row in overlaps:
-                if row[rate_field] != "":
+                if reference_value(row, kind) != "":
                     conflicts.setdefault(canonical(row["position"]), set()).add(
-                        Decimal(row[rate_field])
+                        Decimal(reference_value(row, kind))
                     )
+            result["conflicting_reference_rows"] = [
+                r["source_csv_row_number"]
+                for r in overlaps
+                if len(conflicts.get(canonical(r["position"]), set())) > 1
+            ]
             if not reason:
                 if not candidates:
                     reason = "No schedule matches this contractor and classification or trade. Review the classification map."
@@ -252,8 +276,10 @@ def compare(
                     reason = "Approved schedules for the same classification overlap with conflicting rates. Review the reference schedule."
             rates_by_value = {}
             for row in approved:
-                if row[rate_field] != "":
-                    rates_by_value.setdefault(Decimal(row[rate_field]), row[rate_field])
+                if reference_value(row, kind) != "":
+                    rates_by_value.setdefault(
+                        Decimal(reference_value(row, kind)), reference_value(row, kind)
+                    )
             available = [rates_by_value[value] for value in sorted(rates_by_value)]
             result["approved_rates"] = available
             if not reason and not available:
@@ -263,15 +289,19 @@ def compare(
                 matches = [
                     r
                     for r in approved
-                    if r[rate_field] != ""
-                    and Decimal(r[rate_field]) == Decimal(number(submitted))
+                    if reference_value(r, kind) != ""
+                    and Decimal(reference_value(r, kind)) == Decimal(number(submitted))
                 ]
-                chosen = matches or [r for r in approved if r[rate_field] != ""]
+                chosen = matches or [
+                    r for r in approved if reference_value(r, kind) != ""
+                ]
                 result["matched_classifications"] = sorted(
                     {r["position"] for r in chosen}
                 )
                 if matches or len(available) == 1:
-                    expected = matches[0][rate_field] if matches else available[0]
+                    expected = (
+                        reference_value(matches[0], kind) if matches else available[0]
+                    )
                     with localcontext() as context:
                         context.prec = max(28, len(submitted) + len(expected) + 2)
                         delta = Decimal(number(submitted)) - Decimal(expected)

@@ -23,6 +23,8 @@ from ocr_ingestion.models import is_labor_rate
 from .checker import CHECKER_VERSION, compare, differences_csv, parse_reference
 from .documents import page_image, receive_upload, restore_extraction
 from .matching import canonical, classification_graph, compatible
+from .pay_basis import PAY_BASES
+from .reference_audit import reference_conflicts
 from .review import review_progress, table_tokens
 from .schemas import (
     ActivationRequest,
@@ -33,6 +35,7 @@ from .schemas import (
     ReviewDetails,
     ReviewRequest,
     SaveRequest,
+    TableContext,
 )
 from .state import State, fingerprint, now
 
@@ -418,6 +421,11 @@ def create_app(data_dir=None, frontend_dir=None):
         from datetime import date
 
         values = {k: v.strip() for k, v in body.model_dump().items()}
+        if values["confirmed_pay_basis"]:
+            if values["confirmed_pay_basis"] not in PAY_BASES:
+                raise ValueError("Choose REG, OT, DT, OT_PREMIUM, or DT_PREMIUM.")
+            if not values["pay_basis_evidence"]:
+                raise ValueError("Record source evidence for the confirmed pay basis.")
         for field in ["work_start", "work_end"]:
             if (
                 values[field]
@@ -434,15 +442,64 @@ def create_app(data_dir=None, frontend_dir=None):
 
     @app.post("/api/records/details")
     def bulk_details(body: BulkDetails):
-        known = {r["record_id"] for r in saved_records()}
-        if set(body.records) - known:
+        known = {r["record_id"]: r for r in saved_records()}
+        if set(body.records) - set(known):
             raise HTTPException(404, "One or more saved records could not be found.")
         # Validate the entire selection before committing any comparison details.
         values = {
             identifier: validated_details(detail)
             for identifier, detail in body.records.items()
         }
+        for identifier, value in values.items():
+            if value["confirmed_pay_basis"] and (
+                not known[identifier].get("rate")
+                or any(
+                    known[identifier].get(f) for f in ("reg_rate", "ot_rate", "dt_rate")
+                )
+            ):
+                raise ValueError(
+                    "Pay-basis confirmation applies only to a single generic rate."
+                )
         with operation_lock:
+            # Older clients do not know these evidence fields. Preserve confirmations
+            # only while the effective contractor/classification/work period is unchanged.
+            existing = details()
+            for identifier, value in values.items():
+                previous = existing.get(identifier, {})
+                source = known[identifier]
+
+                def context(item, source=source):
+                    start = item.get("work_start") or source.get("work_start", "")
+                    return (
+                        item.get("contractor") or source.get("contractor", ""),
+                        item.get("classification")
+                        or source.get("position_original")
+                        or source.get("description", ""),
+                        start,
+                        item.get("work_end") or source.get("work_end") or start,
+                    )
+
+                changed_context = context(value) != context(previous)
+                for field in (
+                    "confirmed_pay_basis",
+                    "pay_basis_evidence",
+                    "context_evidence",
+                ):
+                    if field not in body.records[identifier].model_fields_set:
+                        value[field] = existing.get(identifier, {}).get(field, "")
+                if changed_context:
+                    if (
+                        "context_evidence"
+                        not in body.records[identifier].model_fields_set
+                    ):
+                        value["context_evidence"] = ""
+                    if (
+                        "confirmed_pay_basis"
+                        not in body.records[identifier].model_fields_set
+                    ):
+                        value["confirmed_pay_basis"] = ""
+                        value["pay_basis_evidence"] = ""
+                validated_details(ReviewDetails(**value))
             state.put_many(
                 "detail",
                 {
@@ -459,6 +516,51 @@ def create_app(data_dir=None, frontend_dir=None):
     @app.put("/api/records/{record_id}/details")
     def put_details(record_id: str, body: ReviewDetails):
         return bulk_details(BulkDetails(records={record_id: body}))[record_id]
+
+    @app.post("/api/records/table-context")
+    def table_context(body: TableContext):
+        if not body.context_evidence.strip():
+            raise ValueError(
+                "Record the source page or ticket supporting these details."
+            )
+        changes = {
+            k: v.strip()
+            for k, v in body.model_dump().items()
+            if k in {"contractor", "work_start", "work_end"} and v.strip()
+        }
+        if not changes:
+            raise ValueError("Supply a contractor or work dates to confirm.")
+        if bool(changes.get("work_start")) != bool(changes.get("work_end")):
+            raise ValueError("Confirm both work dates for the table.")
+        with operation_lock:
+            current = details()
+            selected = [
+                r
+                for r in saved_records()
+                if r["document_id"] == body.document_id
+                and r["table_id"] == body.table_id
+            ]
+            if not selected:
+                raise HTTPException(404, "No saved rows match this document and table.")
+            return bulk_details(
+                BulkDetails(
+                    records={
+                        r["record_id"]: ReviewDetails(
+                            **{
+                                **{
+                                    k: v
+                                    for k, v in current.get(r["record_id"], {}).items()
+                                    if k
+                                    not in {"confirmed_pay_basis", "pay_basis_evidence"}
+                                },
+                                **changes,
+                                "context_evidence": body.context_evidence.strip(),
+                            }
+                        )
+                        for r in selected
+                    }
+                )
+            )
 
     @app.get("/api/classification-map")
     def get_classification_map():
@@ -545,6 +647,10 @@ def create_app(data_dir=None, frontend_dir=None):
                 "Content-Disposition": f'attachment; filename="reference-{identifier[:12]}.csv"'
             },
         )
+
+    @app.get("/api/reference/{identifier}/conflicts")
+    def get_reference_conflicts(identifier: str):
+        return reference_conflicts(entity("reference", identifier))
 
     @app.post("/api/reference/activate")
     def activate_reference(body: ActivationRequest):

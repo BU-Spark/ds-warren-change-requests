@@ -146,11 +146,21 @@ def test_generic_labor_comparison_details_and_staleness(client, tmp_path):
     ids = [r["record_id"] for r in records]
     original = (tmp_path / "document_line_items.csv").read_bytes()
     first = client.post("/api/checks", json={"record_ids": ids}).json()
-    assert first["counts"] == {"match": 2, "difference": 1, "needs_review": 0}
+    assert first["counts"] == {"match": 2, "difference": 0, "needs_review": 1}
     assert all(r["match_method"] == "contractor_rate" for r in first["results"])
     for identifier in ids:
+        row = next(r for r in records if r["record_id"] == identifier)
+        confirmed = (
+            {
+                "confirmed_pay_basis": "REG",
+                "pay_basis_evidence": "Synthetic agreement confirms regular basis despite Premium wording.",
+            }
+            if "Premium" in row["description"]
+            else {}
+        )
         response = client.put(
-            f"/api/records/{identifier}/details", json={"classification": "Carpenter"}
+            f"/api/records/{identifier}/details",
+            json={"classification": "Carpenter", **confirmed},
         )
         assert response.status_code == 200
     second = client.post("/api/checks", json={"record_ids": ids}).json()
@@ -472,11 +482,8 @@ def test_old_rate_type_choices_are_ignored_and_prior_rules_are_outdated(
     details = client.get("/api/records").json()["details"]
     assert all("generic_rate_type" not in value for value in details.values())
     result = client.post("/api/checks", json={"record_ids": ids}).json()
-    assert all(
-        f["rate_type"] == "REG" and f["reference_rate_field"] == "reg_rate"
-        for f in result["results"]
-    )
-    assert result["counts"] == {"match": 2, "difference": 1, "needs_review": 0}
+    assert [f["rate_type"] for f in result["results"]] == ["REG", "UNRESOLVED", "REG"]
+    assert result["counts"] == {"match": 2, "difference": 0, "needs_review": 1}
     assert not result["stale"] and not result["rules_changed"]
     legacy = {k: v for k, v in result.items() if k != "checker_version"}
     client.app.state.store.put("run", result["id"], legacy)
