@@ -119,3 +119,10 @@ Contributor constraints are in [AGENTS.md](AGENTS.md). Private implementation ha
 ## Additional worker-detail ledger layout
 
 Printed ledgers with FWD, Ticket, Date, Area, Job Name, Description, Worker, Craft, Hours, Rate ($/hr), and Cost columns are now recognized. The parser preserves source ticket IDs, printed work dates, worker names, classifications, hours, rates, and row totals. Duplicate-looking detail rows remain separate; zero-work rows and repeated By Craft summaries are excluded. Source review is required before saving, including for native PDF text. Contractor identity is not inferred for mixed-company documents. This supports a specific layout, not arbitrary handwriting or every proposal format.
+
+
+## Additional proposal and slip rows
+
+The extractor also recognizes complete Field Labor proposal rows (hours/rate/cost), dated T&M Slip sections with PF classifications and explicit ST/RT/OT/DT suffixes, and explicit labor statements such as `Labor: 8 hours @ $20.00 $160.00`. These patterns require the printed hours, rate and amount; they do not calculate a missing rate or include material lines. Zero-hour templates are omitted. Explicit pay suffixes populate the corresponding rate/hour fields; PT stays generic. Dark neutral printed text is retained rather than mistaken for colored corrections.
+
+These rows always require source review. Contractor metadata is left blank to avoid assigning the enclosing packet's contractor to another company's proposal; confirm it through comparison details before checking. Only a dated slip heading supplies work dates, scoped to its own section; quote dates are not used. Original crossed-out submissions remain subject to the existing original-values policy. This does not validate handwritten replacement values or final approved amounts.

@@ -46,14 +46,18 @@ def _native_words(page) -> tuple[list[Word], int]:
     # same coordinates as the original rate without replacing its PDF text.
     spans = [span for block in page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)["blocks"] if "lines" in block
              for line in block["lines"] for span in line["spans"]]
-    base_fonts = {span["font"] for span in spans if span["color"] == 0
+    def dark_neutral(color):
+        channels = [(color >> shift) & 255 for shift in (16, 8, 0)]
+        return max(channels) <= 80 and max(channels) - min(channels) <= 16
+
+    base_fonts = {span["font"] for span in spans if dark_neutral(span["color"])
                   and any(c["c"].strip() for c in span["chars"])}
     kept = []
     removed = 0
     for span in spans:
         text = "".join(char["c"] for char in span["chars"])
         if any(mark in text for mark in "✓✔☑") or (
-            span["color"] != 0 and base_fonts and span["font"] not in base_fonts
+            not dark_neutral(span["color"]) and base_fonts and span["font"] not in base_fonts
         ):
             removed += 1
         else:
@@ -367,6 +371,57 @@ def _extract_known_tables(result, words, page_number, method, metadata):
     return tables
 
 
+
+def _extract_labor_items(result, words, page_number, method, metadata):
+    """Explicit proposal/slip rows and hours-at-rate labor statements.
+
+    No arithmetic reconstruction, date propagation across pages, or contractor
+    inheritance in mixed-company packets. Every new row requires source review.
+    """
+    money = r"\$?\s*([\d,]+\.\d{2})"
+    proposal = re.compile(r"^(?:\d+\s+)?(Field Labor\s*.+?)\s+(\d+(?:\.\d+)?)\s+" + money + r"\s*:?\s+" + money + r"\s*$", re.I)
+    slip_row = re.compile(r"^(PF\s+.+?-(?:ST|RT|OT|DT))\s+(\d+(?:\.\d+)?)\s+" + money + r"\s+" + money + r"\s*$", re.I)
+    statement = re.compile(r"^(Labor\s*:|Field Labor\s+.+?|Mason|Laborer)\s*(\d+(?:\.\d+)?)\s*(?:hrs|hours)\s*(?:@|x)\s*" + money + r"\s*:?\s+" + money + r"\s*$", re.I)
+    tables = []
+    work_date = ticket = ""
+    for line in _lines(words):
+        text = _text(line).strip()
+        heading = re.match(r"T&M Slip\s+(\d+)\s*-\s*[A-Za-z]+\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.I)
+        if heading:
+            ticket, work_date = heading.groups()
+            continue
+        if re.match(r"^(?:\d+\s+Total Hours|Materials?|Subtotal|Total|Terrace)\b", text, re.I):
+            work_date = ticket = ""
+        match = statement.fullmatch(text) or proposal.fullmatch(text)
+        is_slip = False
+        if not match and ticket:
+            match = slip_row.fullmatch(text)
+            is_slip = bool(match)
+        if not match:
+            continue
+        label, hours, rate, amount = match.groups()
+        if Decimal(hours) == 0:
+            continue
+        table_id = f"p{page_number}-y{round(line[0].y)}-labor_item"
+        values = {"row_type": "labor", "description": label, "position_original": label,
+                  "hours": hours, "rate": rate, "total_amount": amount,
+                  "contractor": "", "ticket_id": ticket if is_slip else "",
+                  "work_start": work_date if is_slip else "", "work_end": work_date if is_slip else ""}
+        basis = re.search(r"-\s*(ST|RT|OT|DT|PT)\s*$", label, re.I)
+        if basis:
+            values["rate_basis_raw"] = basis[1].upper()
+            field = {"ST": "reg", "RT": "reg", "OT": "ot", "DT": "dt"}.get(basis[1].upper())
+            if field:
+                values.update({field + "_hours": hours, field + "_rate": rate, "hours": "", "rate": ""})
+        table = Table(table_id, page_number, "labor", ["description", "hours", "rate", "total_amount"],
+                      [[label, hours, rate, amount]],
+                      [min(w.x0 for w in line), min(w.y0 for w in line), max(w.x1 for w in line), max(w.y1 for w in line)], method, True)
+        _record(result, table, 1, values, metadata)
+        if table.record_ids:
+            tables.append(table)
+            result.issue(page_number, "labor_item_review_required", "Confirm source classification, contractor, work dates, and original submitted values for this proposal/slip row.", table_id=table_id)
+    return tables
+
 def _fallback_tables(page, words, page_number):
     """Offer ruled unfamiliar tables for explicit mapping using cleaned source words."""
     result = []
@@ -493,6 +548,7 @@ def extract_document(
                 relevant_words = _labor_words(words) if acme_document else words
                 # Try native tables even when a short table contains very few words.
                 tables = _extract_known_tables(result, relevant_words, page_number, method, metadata)
+                tables.extend(_extract_labor_items(result, words, page_number, method, metadata))
                 if not tables and relevant_words:
                     tables = _fallback_tables(page, relevant_words, page_number)
                 large_raster = False
@@ -520,6 +576,7 @@ def extract_document(
                         result.pages.append({"page": page_number, "status": "skipped_no_labor_section" if acme_document else "no_printed_cost_table_header"})
                         continue
                     tables = _extract_known_tables(result, relevant_words, page_number, method, metadata)
+                    tables.extend(_extract_labor_items(result, words, page_number, method, metadata))
                     if tables:
                         result.issue(page_number, "ocr_review_required", "Review the printed table against the page; do not accept handwritten values.")
                 if removed:
