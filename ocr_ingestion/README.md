@@ -114,3 +114,8 @@ The evaluator writes private reports and per-document evidence to `data/ocr_inge
 This real-document evaluation disables OCR because the supplied labor tables have embedded printed text. Scanned printed-table extraction is tested separately with synthetic images and requires review in the app. Missing source documents and genuine mismatches are reported rather than silently ignored or fixed by copying reference values.
 
 Contributor constraints are in [AGENTS.md](AGENTS.md). Private implementation handoffs remain local and are excluded from Git. Existing cleaning and teammate notebooks remain unchanged.
+
+
+## Additional worker-detail ledger layout
+
+Printed ledgers with FWD, Ticket, Date, Area, Job Name, Description, Worker, Craft, Hours, Rate ($/hr), and Cost columns are now recognized. The parser preserves source ticket IDs, printed work dates, worker names, classifications, hours, rates, and row totals. Duplicate-looking detail rows remain separate; zero-work rows and repeated By Craft summaries are excluded. Source review is required before saving, including for native PDF text. Contractor identity is not inferred for mixed-company documents. This supports a specific layout, not arbitrary handwriting or every proposal format.

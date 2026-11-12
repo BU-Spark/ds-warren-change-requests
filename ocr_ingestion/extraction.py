@@ -106,7 +106,7 @@ def _split(line, centers):
     cells = [[] for _ in centers]
     boundaries = [(centers[i][0] + centers[i + 1][0]) / 2 for i in range(len(centers) - 1)]
     for i in range(len(boundaries)):
-        if centers[i][1] == "quantity" and centers[i + 1][1] == "description":
+        if centers[i][1] in {"quantity", "_job"} and centers[i + 1][1] == "description":
             # Wide description headings are centered; the quantity column is narrow.
             boundaries[i] = centers[i][0] + (centers[i + 1][0] - centers[i][0]) * .25
     for word in line:
@@ -151,6 +151,22 @@ def _labor_words(words):
 def _detect_header(lines, index):
     line = lines[index]
     keys = [_key(word.text) for word in line]
+    if {"fwd", "ticket", "date", "area", "job", "description", "worker", "craft", "hours", "rate", "cost"}.issubset(keys):
+        # Printed worker-detail ledger; retain contractor/date evidence rather
+        # than deriving identities or rate types from a price match.
+        mapping = {"fwd": "_fwd", "ticket": "ticket_id", "date": "work_start",
+                   "area": "_area", "job": "_job", "description": "description",
+                   "worker": "worker_name", "craft": "position_original",
+                   "hours": "hours", "rate": "rate", "cost": "total_amount"}
+        groups = []
+        for word in line:
+            if _key(word.text) in mapping:
+                groups.append((mapping[_key(word.text)], [word.x]))
+            elif groups:
+                groups[-1][1].append(word.x)
+        centers = [(sum(xs) / len(xs), field) for field, xs in groups]
+        if len(centers) == len(mapping):
+            return "labor_detail", sorted(centers), True
     if {"date", "ticket", "name", "rating"}.issubset(keys) and keys.count("st") == 3:
         fields = []
         groups = Counter()
@@ -261,8 +277,9 @@ def _extract_known_tables(result, words, page_number, method, metadata):
             continue
         end = detected[n + 1][0] if n + 1 < len(detected) else len(lines)
         body = lines[index + 1:end]
+        worker_ledger = "_fwd" in [field for _, field in centers]
         trade_table = [field for _, field in centers] == ["position_original", "hours", "rate", "extension_amount"]
-        if (method == "ocr" or kind == "unfamiliar" or trade_table) and not _has_tabular_body(lines[index], body, centers):
+        if (method == "ocr" or kind == "unfamiliar" or trade_table or worker_ledger) and not _has_tabular_body(lines[index], body, centers):
             continue
         table_id = f"p{page_number}-y{round(lines[index][0].y)}-{kind}"
         table = Table(table_id, page_number, kind, [field for _, field in centers], [],
@@ -317,7 +334,7 @@ def _extract_known_tables(result, words, page_number, method, metadata):
                 continue  # Users explicitly map the raw table before records are created.
             if kind in {"labor_detail", "labor_tally"} and not any(
                 values.get(field, "").strip() not in {"", "-", "—", "–"}
-                for field in ("reg_hours", "ot_hours", "dt_hours", "reg_amount", "ot_amount", "dt_amount", "total_amount")
+                for field in ("hours", "reg_hours", "ot_hours", "dt_hours", "reg_amount", "ot_amount", "dt_amount", "total_amount")
             ):
                 continue  # Blank BrandSafway template rows can contain preprinted rates.
             if kind == "labor_tally" and centers[1][1] == "reg_hours":
@@ -328,6 +345,13 @@ def _extract_known_tables(result, words, page_number, method, metadata):
                         continue
                 except ValueError:
                     pass  # Preserve malformed source cells for explicit review below.
+            if worker_ledger:
+                try:
+                    if not any(Decimal(number(values.get(field, "")) or "0") != 0
+                               for field in ("hours", "total_amount")):
+                        continue
+                except ValueError:
+                    pass  # Keep invalid cells visible for review, never invent values.
             if kind == "labor_detail":
                 if not DATE_RE.fullmatch(values.get("work_start", "")):
                     continue

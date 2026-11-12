@@ -36,18 +36,6 @@ class ReviewDetails(StrictModel):
     classification: str = Field(default="", max_length=300)
     work_start: str = ""
     work_end: str = ""
-    context_evidence: str = Field(default="", max_length=3000)
-    confirmed_pay_basis: str = Field(default="", max_length=30)
-    pay_basis_evidence: str = Field(default="", max_length=3000)
-
-
-class TableContext(StrictModel):
-    document_id: str = Field(min_length=1)
-    table_id: str = Field(min_length=1)
-    contractor: str = Field(default="", max_length=300)
-    work_start: str = ""
-    work_end: str = ""
-    context_evidence: str = Field(min_length=1, max_length=3000)
 
 
 class ClassificationAlias(StrictModel):

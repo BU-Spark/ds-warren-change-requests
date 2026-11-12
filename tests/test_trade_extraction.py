@@ -183,3 +183,132 @@ def test_multiline_proposal_preserves_explicit_rate_types_and_skips_unused_rows(
     assert row["reg_hours"] == "8" and row["ot_hours"] == "2"
     assert row["work_start"] == row["contractor"] == ""
     assert result.tables[0].requires_review
+
+
+def write_worker_ledger(path, lines):
+    doc = pymupdf.open()
+    page = doc.new_page(width=1000, height=600)
+    for y, cells in lines:
+        for x, text in cells:
+            page.insert_text((x, y), text, fontsize=8, fontname="cour")
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def worker_ledger_lines():
+    return [
+        (
+            80,
+            [
+                (20, "FWD"),
+                (80, "Ticket #"),
+                (150, "Date"),
+                (230, "Area"),
+                (310, "Job Name"),
+                (430, "Description"),
+                (560, "Worker"),
+                (650, "Craft"),
+                (730, "Hours"),
+                (790, "Rate ($/hr)"),
+                (890, "Cost ($)"),
+            ],
+        ),
+        (
+            110,
+            [
+                (20, "FWD 1"),
+                (80, "1001"),
+                (150, "4/27/2026"),
+                (230, "Interior"),
+                (310, "Example Job"),
+                (400, "Repair panels"),
+                (560, "Alex Smith"),
+                (650, "Glazier - F"),
+                (730, "7.5"),
+                (790, "$20.00"),
+                (890, "$150.00"),
+            ],
+        ),
+        (
+            135,
+            [
+                (20, "FWD 1"),
+                (80, "1002"),
+                (150, "4/28/2026"),
+                (230, "Interior"),
+                (310, "Example Job"),
+                (400, "Repair panels"),
+                (560, "Alex Smith"),
+                (650, "Glazier - F"),
+                (730, "7.5"),
+                (790, "$20.00"),
+                (890, "$150.00"),
+            ],
+        ),
+        (
+            160,
+            [
+                (20, "By Craft"),
+                (650, "Glazier - F"),
+                (730, "15"),
+                (790, "$20.00"),
+                (890, "$300.00"),
+            ],
+        ),
+    ]
+
+
+def test_worker_ledger_preserves_rates_dates_and_requires_review(tmp_path):
+    result = extract_document(
+        write_worker_ledger(tmp_path / "ledger.pdf", worker_ledger_lines()),
+        use_ocr=False,
+    )
+    assert len(result.records) == 2
+    row = result.records[0]
+    assert (
+        row["ticket_id"],
+        row["worker_name"],
+        row["position_original"],
+        row["description"],
+    ) == ("1001", "Alex Smith", "Glazier - F", "Repair panels")
+    assert (row["hours"], row["rate"], row["total_amount"], row["work_start"]) == (
+        "7.5",
+        "20.00",
+        "150.00",
+        "2026-04-27",
+    )
+    assert row["contractor"] == row["reg_rate"] == ""
+    assert result.records[1]["work_start"] == "2026-04-28"
+    assert len({r["record_id"] for r in result.records}) == 2
+    assert result.tables[0].requires_review
+    with pytest.raises(ValueError, match="review"):
+        append_records(result, tmp_path / "rows.csv", [row["record_id"]])
+
+
+def test_worker_ledger_excludes_zero_work_and_missing_date(tmp_path):
+    lines = worker_ledger_lines()
+    lines[1] = (
+        110,
+        [(x, "0" if x in (730, 890) else value) for x, value in lines[1][1]],
+    )
+    lines[2] = (
+        135,
+        [(x, "Unknown" if x == 150 else value) for x, value in lines[2][1]],
+    )
+    result = extract_document(
+        write_worker_ledger(tmp_path / "ledger.pdf", lines), use_ocr=False
+    )
+    assert not result.records
+
+
+def test_worker_ledger_scanned_printed_table(tmp_path):
+    if not shutil.which("tesseract"):
+        pytest.skip("Local Tesseract is not installed")
+    source = write_worker_ledger(tmp_path / "ledger.pdf", worker_ledger_lines())
+    with pymupdf.open(source) as doc:
+        doc[0].get_pixmap(dpi=180).save(tmp_path / "ledger.png")
+    result = extract_document(tmp_path / "ledger.png")
+    assert len(result.records) == 2
+    assert [r["rate"] for r in result.records] == ["20.00", "20.00"]
+    assert all(table.requires_review for table in result.tables)
