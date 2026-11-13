@@ -79,6 +79,40 @@ Matching rules:
 
 The CSV export contains one finding per differing source row/rate type, with finding/run/record/document IDs, project, contractor, classification, work period, source location, submitted/approved rates, signed difference, reference_rate_field (reg_rate for regular), reference version and tracker row, approval evidence, comparison details, matching method/explanation, possible classifications, approved rate set, and all supporting reference rows. Spreadsheet formula prefixes in textual source labels are escaped. All differences in the selected run are exported; search filters affect the screen only. Outdated runs are labeled in the interface and download filename.
 
+## Results metrics and printable PCI reports
+
+Labor checks and Differences include a summary and **Results by document**.
+Select a document, contractor, or project to scope the metrics, findings, and
+printable report together. Documents are grouped by source identity, so two
+versions with the same filename remain separate. A document row shows matching
+rates / total rates checked and its percentage, plus counts of differences and
+unresolved checks. Click the row to focus on that document.
+
+**Match percentage = matching rates ÷ total rate comparisons** in the selected
+document/contractor/project scope. Each REG, OT, or DT rate is one comparison;
+one source row may contribute several comparisons. Unresolved checks stay in
+the denominator and are not confirmed differences. An empty scope shows no
+percentage. Search filters only the findings list, leaving the summary and
+report denominator intact. Select prior check runs to inspect their saved
+results; metrics never combine reruns into a misleading cumulative total.
+
+Choose **Print PCI report** to preview a report, then **Print / Save PDF** to
+open the browser print dialog. It includes scope, check/preparation dates,
+reference version, per-document summaries, and detailed confirmed differences
+with contractor/classification, source page/ticket, work dates, submitted and
+approved rates, per-hour difference when uniquely determined, tracker rows,
+and the checker explanation. Items needing review appear separately by default;
+they may be excluded explicitly but remain counted and disclosed. Matching
+rate details are omitted. Reports of outdated runs display a rerun warning.
+
+Reports contain saved comparisons only; unsaved extraction rows and processing
+failures are not counted. Source page numbers are evidence citations, not the
+report's location within the original PCI. The report does not approve/reject
+the PCI or calculate total financial impact. Client reports should be shared
+only through approved channels. The existing **Download differences CSV**
+continues to export all confirmed differences from the entire selected run;
+its scope is disclosed separately from the filtered print report.
+
 ## Classification map
 
 Open **Classification map** in Labor checks or Differences. The active tracker generates a local hierarchy: contractor → trade family → actual tracker classification → source schedule/rate. It covers every known nonblank classification in that reference, with unfamiliar titles under Other classifications. Family labels and spelling aliases organize known data; this is not a claim to know every construction occupation or every possible synonym.

@@ -1,6 +1,10 @@
 import DocumentWorkflowNav, { type DocumentView } from "./DocumentWorkflowNav";
 import ReferenceDialog from "./ReferenceDialog";
 import FindingDialog from "./FindingDialog";
+import ResultsOverview from "./ResultsOverview";
+import ResultsReport from "./ResultsReport";
+import { documents, metrics } from "./results";
+import "./results.css";
 import ComparisonDetailsDialog from "./ComparisonDetailsDialog";
 import ClassificationMap, {
   type ClassificationGraph,
@@ -28,6 +32,7 @@ import {
   Info,
   LoaderCircle,
   Plus,
+  Printer,
   RefreshCw,
   Search,
   Settings2,
@@ -36,7 +41,6 @@ import {
   UploadCloud,
   X,
   AlertCircle,
-  CircleHelp,
 } from "lucide-react";
 import { api, json } from "./api";
 import type { Row, Session, Reference, Run, Finding } from "./types";
@@ -142,6 +146,8 @@ export default function App({
     [projectFilter, setProjectFilter] = useState(""),
     [technical, setTechnical] = useState(false),
     [resultFilter, setResultFilter] = useState("needs_review");
+  const [resultDocument, setResultDocument] = useState("");
+  const [reportOpen, setReportOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false),
     [referencePreview, setReferencePreview] = useState<Reference | null>(null),
     [previewRow, setPreviewRow] = useState<Row | null>(null),
@@ -180,6 +186,8 @@ export default function App({
   const currentTab = tabs.some((t) => t.id === tab) ? tab : "upload";
   const setCurrentRun = (id: string) => {
     setRunId(id);
+    setResultDocument("");
+    setReportOpen(false);
     localStorage.setItem("warren-run", id);
   };
   const load = async () => {
@@ -445,12 +453,15 @@ export default function App({
     (!contractorFilter || r.contractor === contractorFilter) &&
     (!projectFilter || r.project === projectFilter);
   const filteredRows = searchRows(rows, search).filter(matchesFilters);
-  const differences =
-    currentRun?.results.filter((r) => r.outcome === "difference") || [];
+  const scopedResults = (currentRun?.results || [])
+    .filter(matchesFilters)
+    .filter((r) => !resultDocument || r.document_id === resultDocument);
+  const scopedCounts = metrics(scopedResults);
+  const differences = scopedResults.filter((r) => r.outcome === "difference");
   const visibleFindings = searchRows(
     currentTab === "differences"
       ? differences
-      : currentRun?.results.filter((r) => r.outcome === resultFilter) || [],
+      : scopedResults.filter((r) => r.outcome === resultFilter),
     search,
   ).filter(matchesFilters);
   const activeTable =
@@ -484,30 +495,34 @@ export default function App({
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
-      <select
-        aria-label="Filter contractor"
-        value={contractorFilter}
-        onChange={(e) => setContractorFilter(e.target.value)}
-      >
-        <option value="">All contractors</option>
-        {[...new Set(records.map((r) => r.contractor).filter(Boolean))]
-          .sort()
-          .map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-      </select>
-      <select
-        aria-label="Filter project"
-        value={projectFilter}
-        onChange={(e) => setProjectFilter(e.target.value)}
-      >
-        <option value="">All projects</option>
-        {[...new Set(records.map((r) => r.project).filter(Boolean))]
-          .sort()
-          .map((c) => (
-            <option key={c}>{c}</option>
-          ))}
-      </select>
+      {currentTab !== "checks" && currentTab !== "differences" && (
+        <>
+          <select
+            aria-label="Filter contractor"
+            value={contractorFilter}
+            onChange={(e) => setContractorFilter(e.target.value)}
+          >
+            <option value="">All contractors</option>
+            {[...new Set(records.map((r) => r.contractor).filter(Boolean))]
+              .sort()
+              .map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+          </select>
+          <select
+            aria-label="Filter project"
+            value={projectFilter}
+            onChange={(e) => setProjectFilter(e.target.value)}
+          >
+            <option value="">All projects</option>
+            {[...new Set(records.map((r) => r.project).filter(Boolean))]
+              .sort()
+              .map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+          </select>
+        </>
+      )}
     </div>
   );
 
@@ -1469,6 +1484,13 @@ export default function App({
                           Reference version{" "}
                           <code>{short(currentRun.reference_version)}</code>
                         </span>
+                        <button
+                          className="secondary"
+                          disabled={!scopedResults.length}
+                          onClick={() => setReportOpen(true)}
+                        >
+                          <Printer size={17} /> Print PCI report
+                        </button>
                       </div>
                       {currentRun.stale && (
                         <div className="message warning">
@@ -1487,48 +1509,30 @@ export default function App({
                           </button>
                         </div>
                       )}
-                      {currentTab === "checks" ? (
-                        <div className="stats-grid">
-                          {[
-                            {
-                              id: "match",
-                              title: "Matching rates",
-                              icon: CheckCircle2,
-                              tone: "good",
-                              text: "Match an applicable approved schedule",
-                            },
-                            {
-                              id: "difference",
-                              title: "Rate differences",
-                              icon: SlidersHorizontal,
-                              tone: "bad",
-                              text: "Submitted and approved rates differ",
-                            },
-                            {
-                              id: "needs_review",
-                              title: "Needs review",
-                              icon: CircleHelp,
-                              tone: "warn",
-                              text: "More information or reference review needed",
-                            },
-                          ].map(({ id, title, icon: Icon, tone, text }) => (
-                            <button
-                              className={`stat-card ${resultFilter === id ? "selected" : ""}`}
-                              key={id}
-                              onClick={() => setResultFilter(id)}
-                            >
-                              <span className={`stat-icon ${tone}`}>
-                                <Icon size={21} />
-                              </span>
-                              <span className="stat-number">
-                                {currentRun.counts[id]}
-                              </span>
-                              <strong>{title}</strong>
-                              <small>{text}</small>
-                            </button>
-                          ))}
-                        </div>
-                      ) : (
+                      <ResultsOverview
+                        results={currentRun.results}
+                        scopeResults={scopedResults}
+                        documentId={resultDocument}
+                        contractor={contractorFilter}
+                        project={projectFilter}
+                        category={
+                          currentTab === "differences"
+                            ? "difference"
+                            : resultFilter
+                        }
+                        onDocument={setResultDocument}
+                        onContractor={setContractorFilter}
+                        onProject={setProjectFilter}
+                        onCategory={(outcome) => {
+                          setResultFilter(outcome);
+                          if (
+                            currentTab === "differences" &&
+                            outcome !== "difference"
+                          )
+                            setTab("checks");
+                        }}
+                      />
+                      {currentTab === "differences" && (
                         <div className="differences-intro">
                           <div>
                             <span className="difference-total">
@@ -1537,8 +1541,13 @@ export default function App({
                             <div>
                               <h2>Confirmed rate differences</h2>
                               <p>
-                                Out of {currentRun.results.length} rates checked
-                                · {currentRun.counts.needs_review} need review
+                                Out of {scopedResults.length} rates checked ·{" "}
+                                {scopedCounts.needs_review} need review
+                              </p>
+                              <p className="csv-scope-note">
+                                CSV includes the full run; the printable report
+                                follows your document and contractor/project
+                                filters.
                               </p>
                             </div>
                           </div>
@@ -1691,7 +1700,10 @@ export default function App({
                         ) : (
                           <Empty
                             title={
-                              search || contractorFilter || projectFilter
+                              search ||
+                              contractorFilter ||
+                              projectFilter ||
+                              resultDocument
                                 ? "No findings match your filters"
                                 : currentTab === "differences"
                                   ? "No confirmed rate differences"
@@ -1699,8 +1711,8 @@ export default function App({
                             }
                           >
                             {currentTab === "differences" &&
-                            currentRun.counts.needs_review > 0
-                              ? `${currentRun.counts.needs_review} checks still need review. Resolve them in Labor checks to complete the comparison.`
+                            scopedCounts.needs_review > 0
+                              ? `${scopedCounts.needs_review} checks still need review. Resolve them in Labor checks to complete the comparison.`
                               : "Try another category or clear your filters to see more results."}
                           </Empty>
                         )}
@@ -1746,6 +1758,22 @@ export default function App({
           </footer>
         </main>
       </div>
+      {reportOpen && currentRun && (
+        <ResultsReport
+          run={currentRun}
+          results={scopedResults}
+          filters={[
+            resultDocument
+              ? documents(currentRun.results).find(
+                  (d) => d.id === resultDocument,
+                )?.filename || "Selected document"
+              : "All documents",
+            contractorFilter || "All contractors",
+            projectFilter || "All projects",
+          ]}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
       {classificationMap && (
         <ClassificationMap
           graph={classificationMap}
