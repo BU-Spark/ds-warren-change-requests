@@ -46,14 +46,18 @@ def _native_words(page) -> tuple[list[Word], int]:
     # same coordinates as the original rate without replacing its PDF text.
     spans = [span for block in page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)["blocks"] if "lines" in block
              for line in block["lines"] for span in line["spans"]]
-    base_fonts = {span["font"] for span in spans if span["color"] == 0
+    def dark_neutral(color):
+        channels = [(color >> shift) & 255 for shift in (16, 8, 0)]
+        return max(channels) <= 80 and max(channels) - min(channels) <= 16
+
+    base_fonts = {span["font"] for span in spans if dark_neutral(span["color"])
                   and any(c["c"].strip() for c in span["chars"])}
     kept = []
     removed = 0
     for span in spans:
         text = "".join(char["c"] for char in span["chars"])
         if any(mark in text for mark in "✓✔☑") or (
-            span["color"] != 0 and base_fonts and span["font"] not in base_fonts
+            not dark_neutral(span["color"]) and base_fonts and span["font"] not in base_fonts
         ):
             removed += 1
         else:
@@ -106,7 +110,7 @@ def _split(line, centers):
     cells = [[] for _ in centers]
     boundaries = [(centers[i][0] + centers[i + 1][0]) / 2 for i in range(len(centers) - 1)]
     for i in range(len(boundaries)):
-        if centers[i][1] == "quantity" and centers[i + 1][1] == "description":
+        if centers[i][1] in {"quantity", "_job"} and centers[i + 1][1] == "description":
             # Wide description headings are centered; the quantity column is narrow.
             boundaries[i] = centers[i][0] + (centers[i + 1][0] - centers[i][0]) * .25
     for word in line:
@@ -151,6 +155,22 @@ def _labor_words(words):
 def _detect_header(lines, index):
     line = lines[index]
     keys = [_key(word.text) for word in line]
+    if {"fwd", "ticket", "date", "area", "job", "description", "worker", "craft", "hours", "rate", "cost"}.issubset(keys):
+        # Printed worker-detail ledger; retain contractor/date evidence rather
+        # than deriving identities or rate types from a price match.
+        mapping = {"fwd": "_fwd", "ticket": "ticket_id", "date": "work_start",
+                   "area": "_area", "job": "_job", "description": "description",
+                   "worker": "worker_name", "craft": "position_original",
+                   "hours": "hours", "rate": "rate", "cost": "total_amount"}
+        groups = []
+        for word in line:
+            if _key(word.text) in mapping:
+                groups.append((mapping[_key(word.text)], [word.x]))
+            elif groups:
+                groups[-1][1].append(word.x)
+        centers = [(sum(xs) / len(xs), field) for field, xs in groups]
+        if len(centers) == len(mapping):
+            return "labor_detail", sorted(centers), True
     if {"date", "ticket", "name", "rating"}.issubset(keys) and keys.count("st") == 3:
         fields = []
         groups = Counter()
@@ -251,7 +271,12 @@ def _has_tabular_body(header, body, centers):
     return False
 
 
-def _extract_known_tables(result, words, page_number, method, metadata):
+def _source_line_key(line):
+    """Identify one source location, never equal-looking business values."""
+    return tuple((w.x0, w.y0, w.x1, w.y1, w.text) for w in line)
+
+
+def _extract_known_tables(result, words, page_number, method, metadata, *, consumed_rows=None):
     lines = _lines(words)
     detected = [(i, _detect_header(lines, i)) for i in range(len(lines))]
     detected = [(i, value) for i, value in detected if value]
@@ -261,8 +286,9 @@ def _extract_known_tables(result, words, page_number, method, metadata):
             continue
         end = detected[n + 1][0] if n + 1 < len(detected) else len(lines)
         body = lines[index + 1:end]
+        worker_ledger = "_fwd" in [field for _, field in centers]
         trade_table = [field for _, field in centers] == ["position_original", "hours", "rate", "extension_amount"]
-        if (method == "ocr" or kind == "unfamiliar" or trade_table) and not _has_tabular_body(lines[index], body, centers):
+        if (method == "ocr" or kind == "unfamiliar" or trade_table or worker_ledger) and not _has_tabular_body(lines[index], body, centers):
             continue
         table_id = f"p{page_number}-y{round(lines[index][0].y)}-{kind}"
         table = Table(table_id, page_number, kind, [field for _, field in centers], [],
@@ -314,10 +340,12 @@ def _extract_known_tables(result, words, page_number, method, metadata):
                 premium = re.search(r"\bpremium\b.*", description, re.I)
                 values["rate_basis_raw"] = premium.group(0) if premium else ""
             if kind == "unfamiliar":
+                if consumed_rows is not None:
+                    consumed_rows.add(_source_line_key(line))
                 continue  # Users explicitly map the raw table before records are created.
-            if kind in {"labor_detail", "labor_tally"} and not any(
+            if kind in {"labor_detail", "labor_tally"} and not worker_ledger and not any(
                 values.get(field, "").strip() not in {"", "-", "—", "–"}
-                for field in ("reg_hours", "ot_hours", "dt_hours", "reg_amount", "ot_amount", "dt_amount", "total_amount")
+                for field in ("hours", "reg_hours", "ot_hours", "dt_hours", "reg_amount", "ot_amount", "dt_amount", "total_amount")
             ):
                 continue  # Blank BrandSafway template rows can contain preprinted rates.
             if kind == "labor_tally" and centers[1][1] == "reg_hours":
@@ -328,13 +356,33 @@ def _extract_known_tables(result, words, page_number, method, metadata):
                         continue
                 except ValueError:
                     pass  # Preserve malformed source cells for explicit review below.
+            if worker_ledger:
+                values["contractor"] = ""  # A packet-level company is not worker-employer evidence.
+                if not any(values.get(field, "").strip() for field in ("worker_name", "description", "ticket_id", "work_start")):
+                    continue  # Craft-only totals are not worker-detail rows, even if OCR splits "By Craft".
+                try:
+                    printed_work = [number(values[field]) for field in ("hours", "total_amount")
+                                    if values.get(field, "").strip() not in {"", "-", "—", "–"}]
+                    if printed_work and all(Decimal(value) == 0 for value in printed_work):
+                        continue
+                except ValueError:
+                    pass  # Keep invalid cells visible for review, never invent values.
             if kind == "labor_detail":
                 if not DATE_RE.fullmatch(values.get("work_start", "")):
-                    continue
+                    if not worker_ledger:
+                        continue
+                    result.issue(page_number, "unresolved_field", "Confirm the ledger work date against the source.",
+                                 table_id=table_id, row_index=row_index, field="work_start", raw=values.get("work_start", ""))
+                    values["work_start"] = ""
                 values["work_end"] = values["work_start"]
             values["row_type"] = "labor"
+            previous_count = len(table.record_ids)
             _record(result, table, row_index, values, metadata)
+            if consumed_rows is not None and len(table.record_ids) > previous_count:
+                consumed_rows.add(_source_line_key(line))
         if table.rows and (table.record_ids or kind == "unfamiliar"):
+            if worker_ledger:
+                result.issue(page_number, "worker_ledger_review_required", "Confirm worker details, contractor, and printed work dates against the source.", table_id=table_id)
             if trade_table:
                 result.issue(page_number, "trade_table_review_required",
                              "Confirm printed trade abbreviations, generic rate basis, and missing work dates against the source.",
@@ -342,6 +390,72 @@ def _extract_known_tables(result, words, page_number, method, metadata):
             tables.append(table)
     return tables
 
+
+
+def _extract_labor_items(result, words, page_number, method, metadata, *, consumed_rows=()):
+    """Explicit proposal/slip rows and hours-at-rate labor statements.
+
+    No arithmetic reconstruction, date propagation across pages, or contractor
+    inheritance in mixed-company packets. Every new row requires source review.
+    """
+    money = r"\$?\s*([\d,]+\.\d{2})"
+    proposal = re.compile(r"^(?:\d+\s+)?(Field Labor\s*.+?)\s+(\d+(?:\.\d+)?)\s+" + money + r"\s*:?\s+" + money + r"\s*$", re.I)
+    slip_row = re.compile(r"^(PF\s+.+?-(?:ST|RT|OT|DT|PT))\s+(\d+(?:\.\d+)?)\s+" + money + r"\s+" + money + r"\s*$", re.I)
+    statement = re.compile(r"^(Labor\s*:|Field Labor\s+.+?|Mason|Laborer)\s*(\d+(?:\.\d+)?)\s*(?:hrs|hours)\s*(?:@|x)\s*" + money + r"\s*:?\s+" + money + r"\s*$", re.I)
+    tables = []
+    work_date = ticket = ""
+    for line in _lines(words):
+        text = _text(line).strip()
+        if re.match(r"^T&M Slip\b", text, re.I):
+            work_date = ticket = ""
+            heading = re.fullmatch(r"T&M Slip\s+(\d+)\s*-\s*[A-Za-z]+\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, re.I)
+            if heading:
+                try:
+                    work_date = date(heading[2])
+                    ticket = heading[1]
+                except ValueError:
+                    result.issue(page_number, "unresolved_group_date", "Confirm the printed slip work date.", raw=heading[2])
+            continue
+        if _section_heading(line) or re.match(r"^(?:\d+\s+Total Hours|Materials?|Subtotal|Total|LABOR\s+SUB[- ]?TOTAL|Terrace|Quote|Proposal)\b", text, re.I):
+            work_date = ticket = ""
+        if _source_line_key(line) in consumed_rows:
+            continue
+        match = statement.fullmatch(text) or proposal.fullmatch(text)
+        is_slip = False
+        if not match and ticket:
+            match = slip_row.fullmatch(text)
+            is_slip = bool(match)
+        if not match:
+            continue
+        label, hours, rate, amount = match.groups()
+        if Decimal(hours) == 0:
+            continue
+        table_id = f"p{page_number}-y{round(line[0].y)}-labor_item"
+        values = {"row_type": "labor", "description": label, "position_original": label,
+                  "hours": hours, "rate": rate, "total_amount": amount,
+                  "contractor": "", "ticket_id": ticket if is_slip else "",
+                  "work_start": work_date if is_slip else "", "work_end": work_date if is_slip else ""}
+        basis = re.search(r"-\s*(ST|RT|OT|DT|PT)\s*$", label, re.I)
+        if basis:
+            values["rate_basis_raw"] = basis[1].upper()
+            field = {"ST": "reg", "RT": "reg", "OT": "ot", "DT": "dt"}.get(basis[1].upper())
+            if field:
+                values.update({field + "_hours": hours, field + "_rate": rate, "hours": "", "rate": ""})
+        table = Table(table_id, page_number, "labor", ["description", "hours", "rate", "total_amount"],
+                      [[label, hours, rate, amount]],
+                      [min(w.x0 for w in line), min(w.y0 for w in line), max(w.x1 for w in line), max(w.y1 for w in line)], method, True)
+        _record(result, table, 1, values, metadata)
+        if table.record_ids:
+            tables.append(table)
+            result.issue(page_number, "labor_item_review_required", "Confirm source classification, contractor, work dates, and original submitted values for this proposal/slip row.", table_id=table_id)
+    return tables
+
+
+def _extract_page_labor(result, words, page_number, method, metadata):
+    consumed_rows = set()
+    tables = _extract_known_tables(result, words, page_number, method, metadata, consumed_rows=consumed_rows)
+    tables.extend(_extract_labor_items(result, words, page_number, method, metadata, consumed_rows=consumed_rows))
+    return tables
 
 def _fallback_tables(page, words, page_number):
     """Offer ruled unfamiliar tables for explicit mapping using cleaned source words."""
@@ -468,7 +582,7 @@ def extract_document(
                 method = "native"
                 relevant_words = _labor_words(words) if acme_document else words
                 # Try native tables even when a short table contains very few words.
-                tables = _extract_known_tables(result, relevant_words, page_number, method, metadata)
+                tables = _extract_page_labor(result, relevant_words, page_number, method, metadata)
                 if not tables and relevant_words:
                     tables = _fallback_tables(page, relevant_words, page_number)
                 large_raster = False
@@ -495,7 +609,7 @@ def extract_document(
                     if not relevant_words:
                         result.pages.append({"page": page_number, "status": "skipped_no_labor_section" if acme_document else "no_printed_cost_table_header"})
                         continue
-                    tables = _extract_known_tables(result, relevant_words, page_number, method, metadata)
+                    tables = _extract_page_labor(result, relevant_words, page_number, method, metadata)
                     if tables:
                         result.issue(page_number, "ocr_review_required", "Review the printed table against the page; do not accept handwritten values.")
                 if removed:
