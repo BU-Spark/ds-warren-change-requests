@@ -1,71 +1,57 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Building2, ShieldCheck } from "lucide-react";
 import App from "./App";
+import AccountDialog from "./AccountDialog";
 import { api, json } from "./api";
 import "./access.css";
 
-type Session = { enabled: boolean; email: string | null };
-type Mode = "login" | "signup" | "forgot" | "confirm" | "reset";
-type EmailLink = { kind: "email" | "recovery"; token_hash: string };
+type Session = { enabled: boolean; email: string | null; role?: string | null };
+type Mode = "login" | "confirm" | "reset";
+type AccessLink = { kind: "invite" | "recovery"; token: string };
 
-function readEmailLink(): EmailLink | null {
+function readLink(): AccessLink | null {
   const params = new URLSearchParams(window.location.hash.slice(1));
   const kind = params.get("type");
-  const token_hash = params.get("token_hash");
+  const token = params.get("token");
   if (
     params.get("auth") === "confirm" &&
-    (kind === "email" || kind === "recovery") &&
-    token_hash
+    (kind === "invite" || kind === "recovery") &&
+    token
   ) {
     window.history.replaceState(null, "", window.location.pathname);
-    return { kind, token_hash };
+    return { kind, token };
   }
   return null;
 }
-const emailLink = readEmailLink();
-
-const copy = {
-  login: ["Sign in", "Use your verified email to access the review workspace."],
-  signup: [
-    "Create an account",
-    "Use the email your project team approved. We’ll send a verification link.",
-  ],
-  forgot: [
-    "Forgot your password?",
-    "Enter your email to request a password reset link.",
-  ],
-  confirm: [
-    "Open your email link",
-    "Continue to verify your email or start resetting your password.",
-  ],
-  reset: ["Choose a new password", "Use at least 12 characters."],
-};
+const accessLink = readLink();
 
 export default function Access() {
   const [session, setSession] = useState<Session>();
-  const [mode, setMode] = useState<Mode>(emailLink ? "confirm" : "login");
+  const [mode, setMode] = useState<Mode>(accessLink ? "confirm" : "login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [manageAccounts, setManageAccounts] = useState(false);
 
   function reloadSession() {
     setError("");
     api<Session>("/auth/session")
       .then(setSession)
-      .catch(() => {
+      .catch(() =>
         setError(
           "Could not connect to the workspace. Check that the app is running.",
-        );
-      });
+        ),
+      );
   }
   useEffect(() => {
     reloadSession();
     const expired = () => {
       setSession({ enabled: true, email: null });
       setMode("login");
+      setManageAccounts(false);
       setError("Your session ended. Sign in again to continue.");
     };
     window.addEventListener("warren-session-ended", expired);
@@ -86,39 +72,25 @@ export default function Access() {
     setNotice("");
     setError("");
     try {
-      if (mode === "reset" && password !== repeat) {
+      if (mode === "reset" && password !== repeat)
         throw new Error("The passwords do not match.");
-      }
       if (mode === "confirm") {
-        const result = await api<{ kind: EmailLink["kind"] }>(
-          "/auth/confirm",
-          json("POST", emailLink),
-        );
-        changeMode(result.kind === "recovery" ? "reset" : "login");
-        if (result.kind === "email")
-          setNotice("Email verified. You can sign in.");
+        await api("/auth/confirm", json("POST", accessLink));
+        changeMode("reset");
       } else if (mode === "login") {
-        const result = await api<{ email: string }>(
+        const result = await api<{ email: string; role: string }>(
           "/auth/login",
           json("POST", { email, password }),
         );
-        setSession({ enabled: true, email: result.email });
+        setSession({ enabled: true, ...result });
         changeMode("login");
       } else {
-        const body =
-          mode === "forgot"
-            ? { email }
-            : mode === "reset"
-              ? { password }
-              : { email, password };
         const result = await api<{ message: string }>(
-          `/auth/${mode}`,
-          json("POST", body),
+          "/auth/reset",
+          json("POST", { password }),
         );
-        if (mode === "reset") {
-          setSession({ enabled: true, email: null });
-          changeMode("login");
-        }
+        setSession({ enabled: true, email: null });
+        changeMode("login");
         setNotice(result.message);
       }
     } catch (err) {
@@ -138,6 +110,7 @@ export default function Access() {
     try {
       await api("/auth/logout", json("POST", {}));
       changeMode("login");
+      setManageAccounts(false);
       setSession({ enabled: true, email: null });
     } catch {
       setError("Could not sign out. Try again.");
@@ -147,11 +120,39 @@ export default function Access() {
   }
 
   if (session && !session.enabled) return <App />;
-  if (session?.email && mode !== "confirm" && mode !== "reset")
+  if (session?.email && mode === "login")
     return (
-      <App account={{ email: session.email, onLogout: logout, busy, error }} />
+      <>
+        <App
+          account={{
+            email: session.email,
+            onLogout: logout,
+            busy,
+            error,
+            onManageAccounts:
+              session.role === "admin"
+                ? () => setManageAccounts(true)
+                : undefined,
+          }}
+        />
+        {manageAccounts && (
+          <AccountDialog onClose={() => setManageAccounts(false)} />
+        )}
+      </>
     );
 
+  const title =
+    mode === "login"
+      ? "Sign in"
+      : mode === "confirm"
+        ? "Open your access link"
+        : "Set your password";
+  const summary =
+    mode === "login"
+      ? "Use your invited account to access the review workspace."
+      : mode === "confirm"
+        ? "Continue to accept your invitation or reset your password."
+        : "Choose a password of at least 12 characters.";
   return (
     <main className="access-page">
       <div className="access-identity">
@@ -166,9 +167,7 @@ export default function Access() {
         <span className="access-label">
           <ShieldCheck size={17} aria-hidden="true" /> WARREN TOWERS WORKSPACE
         </span>
-        <h1 id="access-title">
-          {session ? copy[mode][0] : "Opening workspace"}
-        </h1>
+        <h1 id="access-title">{session ? title : "Opening workspace"}</h1>
         {!session ? (
           error ? (
             <>
@@ -184,9 +183,9 @@ export default function Access() {
           )
         ) : (
           <>
-            <p className="access-summary">{copy[mode][1]}</p>
+            <p className="access-summary">{summary}</p>
             <form onSubmit={submit} className="access-form">
-              {mode !== "confirm" && mode !== "reset" && (
+              {mode === "login" && (
                 <label>
                   Email
                   <input
@@ -200,7 +199,7 @@ export default function Access() {
                   />
                 </label>
               )}
-              {(mode === "login" || mode === "signup" || mode === "reset") && (
+              {mode !== "confirm" && (
                 <label>
                   {mode === "reset" ? "New password" : "Password"}
                   <input
@@ -210,7 +209,7 @@ export default function Access() {
                       mode === "login" ? "current-password" : "new-password"
                     }
                     minLength={mode === "login" ? 1 : 12}
-                    maxLength={mode === "login" ? 128 : 72}
+                    maxLength={128}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     required
@@ -223,6 +222,7 @@ export default function Access() {
                   <input
                     type="password"
                     autoComplete="new-password"
+                    maxLength={128}
                     value={repeat}
                     onChange={(e) => setRepeat(e.target.value)}
                     required
@@ -242,31 +242,24 @@ export default function Access() {
               <button className="primary" disabled={busy} type="submit">
                 {busy
                   ? "Please wait…"
-                  : {
-                      login: "Sign in",
-                      signup: "Send verification email",
-                      forgot: "Send reset email",
-                      confirm: "Continue",
-                      reset: "Save new password",
-                    }[mode]}
+                  : mode === "login"
+                    ? "Sign in"
+                    : mode === "confirm"
+                      ? "Continue"
+                      : "Save password"}
               </button>
             </form>
-            <div className="access-links">
-              {mode === "login" ? (
-                <>
-                  <button disabled={busy} onClick={() => changeMode("signup")}>
-                    Sign up
-                  </button>
-                  <button disabled={busy} onClick={() => changeMode("forgot")}>
-                    Forgot password?
-                  </button>
-                </>
-              ) : (
+            <p className="access-summary">
+              Need an invitation or password reset? Contact your project team
+              for a private access link.
+            </p>
+            {mode !== "login" && (
+              <div className="access-links">
                 <button disabled={busy} onClick={() => changeMode("login")}>
                   Back to sign in
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
       </section>

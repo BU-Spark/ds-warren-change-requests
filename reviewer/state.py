@@ -2,9 +2,10 @@
 
 import hashlib
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .database import Database
 
 
 class State:
@@ -12,13 +13,15 @@ class State:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.path = self.root / "reviewer.sqlite3"
+        self.database = Database(self.path)
+        order_field = ", created_order BIGSERIAL" if self.database.url else ""
         with self.connect() as db:
             db.execute(
-                "CREATE TABLE IF NOT EXISTS entities (kind TEXT, id TEXT, payload TEXT NOT NULL, PRIMARY KEY(kind,id))"
+                f"CREATE TABLE IF NOT EXISTS entities (kind TEXT, id TEXT, payload TEXT NOT NULL{order_field}, PRIMARY KEY(kind,id))"
             )
 
     def connect(self):
-        return sqlite3.connect(self.path, timeout=30)
+        return self.database.connect()
 
     def get(self, kind, identifier, default=None):
         with self.connect() as db:
@@ -30,7 +33,7 @@ class State:
     def put(self, kind, identifier, payload):
         with self.connect() as db:
             db.execute(
-                "INSERT OR REPLACE INTO entities VALUES (?,?,?)",
+                "INSERT INTO entities(kind,id,payload) VALUES (?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload",
                 (kind, identifier, json.dumps(payload)),
             )
         return payload
@@ -38,7 +41,7 @@ class State:
     def put_many(self, kind, values):
         with self.connect() as db:
             db.executemany(
-                "INSERT OR REPLACE INTO entities VALUES (?,?,?)",
+                "INSERT INTO entities(kind,id,payload) VALUES (?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload",
                 [
                     (kind, identifier, json.dumps(payload))
                     for identifier, payload in values.items()
@@ -50,11 +53,12 @@ class State:
             db.execute("DELETE FROM entities WHERE kind=? AND id=?", (kind, identifier))
 
     def list(self, kind):
+        order = "created_order" if self.database.url else "rowid"
         with self.connect() as db:
             return [
                 json.loads(row[0])
                 for row in db.execute(
-                    "SELECT payload FROM entities WHERE kind=? ORDER BY rowid DESC",
+                    f"SELECT payload FROM entities WHERE kind=? ORDER BY {order} DESC",
                     (kind,),
                 )
             ]

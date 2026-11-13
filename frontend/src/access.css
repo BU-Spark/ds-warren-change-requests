@@ -93,3 +93,29 @@
 .sidebar .account-error {
   color: #ffceca;
 }
+.account-link {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.account-link textarea {
+  width: 100%;
+}
+.account-list {
+  margin-top: 20px;
+}
+.account-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  border-top: 1px solid var(--line);
+  padding: 16px 0;
+  overflow-wrap: anywhere;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

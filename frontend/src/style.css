@@ -112,6 +112,8 @@ select {
   color: #c1cddd;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
   z-index: 10;
 }
 .brand {

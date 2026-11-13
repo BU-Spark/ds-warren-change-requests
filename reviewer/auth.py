@@ -1,25 +1,22 @@
-"""Email authentication for the shared review workspace."""
+"""Invite-only accounts with operator-issued links; no external identity provider."""
 
-import json
 import os
 import re
 from dataclasses import dataclass
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, build_opener
-from urllib.request import Request as UpstreamRequest
+from pathlib import Path
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .accounts import Accounts
+
 PUBLIC_ROUTES = {
     "/api/health",
     "/api/auth/session",
     "/api/auth/login",
-    "/api/auth/signup",
-    "/api/auth/forgot",
     "/api/auth/confirm",
     "/api/auth/reset",
     "/api/auth/logout",
@@ -27,12 +24,16 @@ PUBLIC_ROUTES = {
 EMAIL = re.compile(r"[^\s@,]+@[^\s@,]+\.[^\s@,]+")
 
 
+def normalize_email(email):
+    email = email.strip().casefold()
+    if len(email) > 254 or not EMAIL.fullmatch(email):
+        raise ValueError("Enter a valid email address.")
+    return email
+
+
 @dataclass(frozen=True)
 class AuthConfig:
-    provider: str
-    key: str
     origin: str
-    emails: frozenset[str]
 
     @property
     def secure(self):
@@ -44,31 +45,27 @@ class AuthConfig:
 
     @classmethod
     def from_env(cls):
-        names = (
-            "WARREN_SUPABASE_URL",
-            "WARREN_SUPABASE_PUBLISHABLE_KEY",
-            "WARREN_PUBLIC_URL",
-            "WARREN_ALLOWED_EMAILS",
-        )
-        provider, key, origin, allowed = values = [
-            os.getenv(n, "").strip() for n in names
-        ]
+        if os.getenv("WARREN_SUPABASE_URL") or os.getenv(
+            "WARREN_SUPABASE_PUBLISHABLE_KEY"
+        ):
+            raise RuntimeError(
+                "Remove obsolete WARREN_SUPABASE settings; authentication is now managed by this app."
+            )
+        origin = os.getenv("WARREN_PUBLIC_URL", "").strip().rstrip("/")
         hosted = bool(
             os.getenv("RAILWAY_ENVIRONMENT_ID") or os.getenv("RAILWAY_PUBLIC_DOMAIN")
         )
-        if not any(values) and not hosted:
+        if (
+            not origin
+            and not hosted
+            and os.getenv("WARREN_ALLOW_UNAUTHENTICATED") == "1"
+        ):
             return None
-        if not all(values):
-            raise RuntimeError(
-                "Set all Warren authentication variables before starting."
-            )
-        provider = provider.rstrip("/")
-        origin = origin.rstrip("/")
         app_url = urlsplit(origin)
-        if not re.fullmatch(r"https://[a-z0-9-]+\.supabase\.co", provider):
-            raise RuntimeError("Use the HTTPS URL of your Supabase project.")
-        if not key.startswith("sb_publishable_"):
-            raise RuntimeError("Use a Supabase publishable key.")
+        try:
+            port = app_url.port
+        except ValueError:
+            raise RuntimeError("WARREN_PUBLIC_URL has an invalid port.") from None
         if (
             not app_url.hostname
             or app_url.username
@@ -76,9 +73,10 @@ class AuthConfig:
             or app_url.path
             or app_url.query
             or app_url.fragment
+            or port == 0
         ):
             raise RuntimeError(
-                "WARREN_PUBLIC_URL must be the app origin, without a path."
+                "Set WARREN_PUBLIC_URL to the app origin without a path; authentication is required."
             )
         if app_url.scheme != "https" and not (
             app_url.scheme == "http"
@@ -86,84 +84,66 @@ class AuthConfig:
             and app_url.hostname in {"localhost", "127.0.0.1"}
         ):
             raise RuntimeError("Use HTTPS for the hosted app.")
-        emails = frozenset(
-            e.strip().casefold() for e in allowed.split(",") if e.strip()
-        )
-        if not emails or not all(EMAIL.fullmatch(e) for e in emails):
+        if hosted and (
+            not os.getenv("DATABASE_URL") or not os.getenv("WARREN_DATA_DIR")
+        ):
             raise RuntimeError(
-                "Set WARREN_ALLOWED_EMAILS to comma-separated email addresses."
+                "Railway requires DATABASE_URL and WARREN_DATA_DIR on a persistent volume."
             )
-        return cls(provider, key, origin, emails)
-
-    def email_for(self, user):
-        email = (user.get("email") or "").casefold()
-        return (
-            email if user.get("email_confirmed_at") and email in self.emails else None
-        )
-
-
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
-def provider_request(config, path, *, method="GET", body=None, token=None):
-    headers = {"apikey": config.key, "Content-Type": "application/json"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = UpstreamRequest(
-        f"{config.provider}/auth/v1{path}",
-        data=json.dumps(body).encode() if body is not None else None,
-        headers=headers,
-        method=method,
-    )
-    try:
-        with build_opener(NoRedirect()).open(req, timeout=8) as reply:
-            contents = reply.read()
-            return json.loads(contents) if contents else {}
-    except HTTPError as exc:
-        if exc.code == 429:
-            raise HTTPException(
-                429, "Too many attempts. Wait before trying again."
-            ) from None
-        if exc.code in {400, 401, 403, 404, 422}:
-            return None
-        raise HTTPException(
-            503, "Sign-in service unavailable. Try again shortly."
-        ) from None
-    except (URLError, OSError, ValueError):
-        raise HTTPException(
-            503, "Sign-in service unavailable. Try again shortly."
-        ) from None
+        if hosted:
+            mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "")
+            if (
+                not mount
+                or not Path(mount).is_dir()
+                or Path(mount).resolve()
+                != Path(os.environ["WARREN_DATA_DIR"]).resolve()
+            ):
+                raise RuntimeError(
+                    "Attach an app volume and set WARREN_DATA_DIR to its mount path."
+                )
+        return cls(origin)
 
 
 def signed_in_email(config, request):
-    token = request.cookies.get(config.session_cookie)
-    if not token or not re.fullmatch(r"[\w.-]{1,4096}", token, flags=re.ASCII):
-        return None
-    user = provider_request(config, "/user", token=token)
-    return config.email_for(user or {})
+    return request.app.state.accounts.session_email(
+        request.cookies.get(config.session_cookie)
+    )
 
 
-class EmailBody(BaseModel):
+class Credentials(BaseModel):
     email: str = Field(max_length=254)
-
-
-class Credentials(EmailBody):
     password: str = Field(min_length=1, max_length=128)
 
 
 class NewPassword(BaseModel):
-    password: str = Field(min_length=12, max_length=72)
+    password: str = Field(min_length=12, max_length=128)
 
 
 class Confirmation(BaseModel):
-    kind: str = Field(pattern="^(email|recovery)$")
-    token_hash: str = Field(min_length=16, max_length=256, pattern=r"^[a-zA-Z0-9_-]+$")
+    kind: str = Field(pattern="^(invite|recovery)$")
+    token: str = Field(min_length=32, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+
+
+class AccountAction(BaseModel):
+    email: str = Field(max_length=254)
+    action: str = Field(pattern="^(invite|reset|disable)$")
+
+
+def invitation_link(config, token, kind):
+    # Fragment tokens never reach server access logs or Referer headers.
+    return (
+        config.origin
+        + "/#"
+        + urlencode({"auth": "confirm", "type": kind, "token": token})
+    )
 
 
 def register_auth(app: FastAPI, config: AuthConfig | None):
-    reset_cookie = "warren-recovery"
+    accounts = Accounts(app.state.store.database) if config else None
+    app.state.accounts = accounts
+    reset_cookie = (
+        "__Secure-warren-recovery" if config and config.secure else "warren-recovery"
+    )
     reset_path = "/api/auth/reset"
 
     def configured():
@@ -171,17 +151,11 @@ def register_auth(app: FastAPI, config: AuthConfig | None):
             raise HTTPException(404, "Account sign-in is unavailable.")
         return config
 
-    def validate_password(password):
-        if not 12 <= len(password) or len(password.encode()) > 72:
-            raise HTTPException(
-                400, "Choose a password of at least 12 characters and at most 72 bytes."
-            )
-
-    def set_token(response, cfg, name, path, result, limit):
+    def set_token(response, cfg, name, path, token, seconds):
         response.set_cookie(
             name,
-            result["access_token"],
-            max_age=min(int(result["expires_in"]), limit),
+            token,
+            max_age=seconds,
             path=path,
             httponly=True,
             secure=cfg.secure,
@@ -205,103 +179,95 @@ def register_auth(app: FastAPI, config: AuthConfig | None):
 
     @app.get("/api/auth/session")
     def session(request: Request):
+        email = signed_in_email(config, request) if config else None
         return {
             "enabled": config is not None,
-            "email": signed_in_email(config, request) if config else None,
+            "email": email,
+            "role": accounts.role(email) if email else None,
         }
 
     @app.post("/api/auth/login")
     def login(body: Credentials, response: Response):
         cfg = configured()
         email = body.email.strip().casefold()
-        result = None
-        if email in cfg.emails:
-            result = provider_request(
-                cfg,
-                "/token?grant_type=password",
-                method="POST",
-                body={"email": email, "password": body.password},
-            )
-        if (
-            not result
-            or not result.get("access_token")
-            or not cfg.email_for(result.get("user") or {})
-        ):
+        token = accounts.login(email, body.password)
+        if not token:
             raise HTTPException(
-                401, "Unable to sign in. Check your details and verify your email."
+                401,
+                "Unable to sign in. Check your details or contact your project team.",
             )
-        set_token(response, cfg, cfg.session_cookie, "/", result, 3600)
-        return {"email": email}
-
-    @app.post("/api/auth/signup")
-    def signup(body: Credentials):
-        cfg = configured()
-        email = body.email.strip().casefold()
-        validate_password(body.password)
-        if email in cfg.emails:
-            provider_request(
-                cfg,
-                "/signup",
-                method="POST",
-                body={"email": email, "password": body.password},
-            )
-        return {
-            "message": "If this address is eligible, check your inbox for a verification email."
-        }
-
-    @app.post("/api/auth/forgot")
-    def forgot(body: EmailBody):
-        cfg = configured()
-        email = body.email.strip().casefold()
-        if email in cfg.emails:
-            provider_request(cfg, "/recover", method="POST", body={"email": email})
-        return {
-            "message": "If an eligible account exists, you'll receive a password reset email."
-        }
+        set_token(response, cfg, cfg.session_cookie, "/", token, 3600)
+        return {"email": email, "role": accounts.role(email)}
 
     @app.post("/api/auth/confirm")
     def confirm(body: Confirmation, response: Response):
         cfg = configured()
-        result = provider_request(
-            cfg,
-            "/verify",
-            method="POST",
-            body={"token_hash": body.token_hash, "type": body.kind},
-        )
-        if not result or not cfg.email_for(result.get("user") or {}):
+        token = accounts.confirm(body.token, body.kind)
+        if not token:
             raise HTTPException(
-                400, "This link is invalid or expired. Request a new email."
+                400,
+                "This link is invalid or expired. Contact your project team for a new link.",
             )
-        if body.kind == "recovery":
-            if not result.get("access_token"):
-                raise HTTPException(400, "Request a new password reset email.")
-            set_token(response, cfg, reset_cookie, reset_path, result, 600)
+        set_token(response, cfg, reset_cookie, reset_path, token, 600)
         return {"kind": body.kind}
 
     @app.post(reset_path)
     def reset(body: NewPassword, request: Request, response: Response):
         cfg = configured()
-        validate_password(body.password)
         token = request.cookies.get(reset_cookie)
-        user = provider_request(cfg, "/user", token=token) if token else None
-        if not user or not cfg.email_for(user):
-            raise HTTPException(
-                400, "Your reset link has expired. Request a new email."
-            )
-        if not provider_request(
-            cfg, "/user", method="PUT", body={"password": body.password}, token=token
+        if (
+            not token
+            or len(token) > 128
+            or not accounts.set_password(token, body.password)
         ):
             raise HTTPException(
-                400,
-                "Could not set this password. Try a different password or request a new link.",
+                400, "Your link has expired. Contact your project team for a new link."
             )
         clear(response, cfg, reset_cookie, reset_path)
         clear(response, cfg, cfg.session_cookie)
-        return {"message": "Password updated. Sign in with your new password."}
+        return {"message": "Password saved. Sign in to continue."}
 
     @app.post("/api/auth/logout")
-    def logout(response: Response):
+    def logout(request: Request, response: Response):
         cfg = configured()
+        accounts.logout(request.cookies.get(cfg.session_cookie))
         clear(response, cfg, cfg.session_cookie)
         clear(response, cfg, reset_cookie, reset_path)
         return {"ok": True}
+
+    def require_admin(request):
+        configured()
+        email = signed_in_email(config, request)
+        if not email or accounts.role(email) != "admin":
+            raise HTTPException(403, "App-admin access is required.")
+        return email
+
+    @app.get("/api/admin/accounts")
+    def list_accounts(request: Request):
+        require_admin(request)
+        return accounts.list_accounts()
+
+    @app.post("/api/admin/accounts")
+    def manage_account(body: AccountAction, request: Request):
+        require_admin(request)
+        email = normalize_email(body.email)
+        if body.action == "disable":
+            if accounts.role(email) == "admin":
+                raise HTTPException(
+                    400, "Use the operator command to disable an app admin."
+                )
+            accounts.disable(email)
+            return {"message": "Account disabled and sessions revoked."}
+        token = (
+            accounts.invite(email)
+            if body.action == "invite"
+            else accounts.recovery(email)
+        )
+        if not token:
+            raise HTTPException(400, "No active account is eligible for recovery.")
+        return {
+            "link": invitation_link(
+                config, token, "invite" if body.action == "invite" else "recovery"
+            ),
+            "message": "Share this single-use link privately after confirming the recipient's identity.",
+        }

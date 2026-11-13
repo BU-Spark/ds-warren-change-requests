@@ -6,9 +6,11 @@ import os
 import re
 import threading
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import monotonic
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -69,12 +71,14 @@ def create_app(data_dir=None, frontend_dir=None):
     app.state.data_dir = data
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=[urlsplit(auth.origin).hostname]
+        allowed_hosts=[urlsplit(auth.origin).hostname, "healthcheck.railway.app"]
         if auth
         else ["127.0.0.1", "localhost", "testserver"],
     )
 
     register_auth(app, auth)
+    # One bounded budget for this local process; do not trust forwarded IP headers.
+    auth_attempts = deque()
 
     @app.middleware("http")
     async def local_origin(request, call_next):
@@ -87,6 +91,21 @@ def create_app(data_dir=None, frontend_dir=None):
                 return Response(
                     "Request origin does not match the app.", status_code=403
                 )
+            if request.method == "POST" and request.url.path in PUBLIC_ROUTES - {
+                "/api/health",
+                "/api/auth/session",
+                "/api/auth/logout",
+            }:
+                now = monotonic()
+                while auth_attempts and auth_attempts[0] <= now - 60:
+                    auth_attempts.popleft()
+                if len(auth_attempts) >= 30:
+                    return Response(
+                        "Too many authentication attempts. Try again in a minute.",
+                        status_code=429,
+                        headers={"Retry-After": "60", "Cache-Control": "no-store"},
+                    )
+                auth_attempts.append(now)
             if request.url.path not in PUBLIC_ROUTES:
                 try:
                     email = await run_in_threadpool(signed_in_email, auth, request)
@@ -121,6 +140,9 @@ def create_app(data_dir=None, frontend_dir=None):
             )
         response = await call_next(request)
         response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
         if request.url.path.startswith("/api") or request.url.path in {
             "/",
             "/index.html",

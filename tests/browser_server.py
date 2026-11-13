@@ -1,5 +1,6 @@
 """Disposable synthetic browser-test workspace. Never opens the real data directory."""
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -83,6 +84,18 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         fixtures(Path(sys.argv[1]))
     else:
+        for name in (
+            "WARREN_SUPABASE_URL",
+            "WARREN_SUPABASE_PUBLISHABLE_KEY",
+            "WARREN_PUBLIC_URL",
+            "WARREN_ALLOWED_EMAILS",
+            "RAILWAY_ENVIRONMENT_ID",
+            "RAILWAY_PUBLIC_DOMAIN",
+            "DATABASE_URL",
+            "WARREN_DATA_DIR",
+        ):
+            os.environ.pop(name, None)
+        os.environ["WARREN_ALLOW_UNAUTHENTICATED"] = "1"
         with tempfile.TemporaryDirectory(prefix="warren-browser-") as folder:
             data = Path(folder)
             (data / "labor_rates_fa.csv").write_bytes(reference_bytes())

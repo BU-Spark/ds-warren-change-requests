@@ -55,9 +55,13 @@ npm --prefix frontend run build
 python -m reviewer
 ```
 
+Configure sign-in using [the authentication setup guide](reviewer/AUTH_SETUP.md)
+before starting the server. Authentication settings are required by default;
+the guide documents an explicit bypass for disposable synthetic demos.
+
 Open **http://127.0.0.1:8000**. Use **Upload & review** to extract and save printed labor rates, **Saved data** to browse records, and **Labor checks** to compare them against the rate tracker. **Differences** shows and exports only confirmed rate differences. Matches and unresolved checks stay in Labor checks.
 
-Node.js 22+ is recommended for the frontend build; Node is not needed to run an already built UI. All document processing and storage remain local. See the [reviewer guide](reviewer/README.md) for reference updates, matching rules, and development/browser tests, and the [ingestion guide](ocr_ingestion/README.md) for OCR and the unchanged CSV schema.
+Node.js 22+ is recommended for the frontend build; Node is not needed to run an already built UI. Document processing runs on the reviewer server. Local setup keeps files on your computer; see the [Railway deployment guide](reviewer/RAILWAY.md) for hosted storage and invite-only access. See the [reviewer guide](reviewer/README.md) for reference updates, matching rules, and development/browser tests, and the [ingestion guide](ocr_ingestion/README.md) for OCR and the unchanged CSV schema.
 
 ## Contribution workflow
 

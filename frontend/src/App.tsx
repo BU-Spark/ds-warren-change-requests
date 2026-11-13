@@ -78,6 +78,7 @@ export default function App({
   account?: {
     email: string;
     onLogout: () => void;
+    onManageAccounts?: () => void;
     busy: boolean;
     error: string;
   };
@@ -577,6 +578,14 @@ export default function App({
           </div>
           {account && (
             <>
+              {account.onManageAccounts && (
+                <button
+                  className="secondary account-signout"
+                  onClick={account.onManageAccounts}
+                >
+                  Manage accounts
+                </button>
+              )}
               <button
                 className="secondary account-signout"
                 onClick={account.onLogout}
@@ -603,7 +612,7 @@ export default function App({
           <div>
             <span className="local-status">
               <span className="online-dot" />
-              Local processing
+              {account ? "Private processing" : "Local processing"}
             </span>
             <button
               className="icon-button"
@@ -1242,7 +1251,9 @@ export default function App({
                             <div className="form-footer">
                               <span>
                                 <ShieldCheck size={15} />
-                                Processed on this computer
+                                {account
+                                  ? "Processed in this workspace"
+                                  : "Processed on this computer"}
                               </span>
                               <button
                                 className="primary"
@@ -1729,7 +1740,7 @@ export default function App({
           <footer className="page-footer">
             <span>
               <ShieldCheck size={14} />
-              Local application
+              {account ? "Private workspace" : "Local application"}
             </span>
             <span>Warren Towers</span>
           </footer>

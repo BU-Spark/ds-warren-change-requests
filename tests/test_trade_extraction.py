@@ -1,9 +1,11 @@
 """Synthetic regressions for additional printed trade tables; no client records."""
 
 import shutil
+
 import pymupdf
 import pytest
-from ocr_ingestion import extract_document, append_records
+
+from ocr_ingestion import append_records, extract_document
 from tests.helpers import write_pdf
 
 
