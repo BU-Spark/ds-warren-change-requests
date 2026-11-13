@@ -6,20 +6,25 @@ import os
 import re
 import threading
 import uuid
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import monotonic
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 from filelock import Timeout as LockTimeout
+from starlette.concurrency import run_in_threadpool
 
 from ocr_ingestion import append_records, extract_document, load_records
 from ocr_ingestion.extraction import SUPPORTED, map_table
 from ocr_ingestion.models import is_labor_rate
 
+from .auth import PUBLIC_ROUTES, AuthConfig, register_auth, signed_in_email
 from .checker import CHECKER_VERSION, compare, differences_csv, parse_reference
 from .documents import page_image, receive_upload, restore_extraction
 from .matching import canonical, classification_graph, compatible
@@ -40,6 +45,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def create_app(data_dir=None, frontend_dir=None):
+    auth = AuthConfig.from_env()
     data = Path(data_dir or os.environ.get("WARREN_DATA_DIR", ROOT / "data")).resolve()
     state = State(data / "reviewer")
     operation_lock = threading.RLock()
@@ -64,14 +70,60 @@ def create_app(data_dir=None, frontend_dir=None):
     app.state.store = state
     app.state.data_dir = data
     app.add_middleware(
-        TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"]
+        TrustedHostMiddleware,
+        allowed_hosts=[urlsplit(auth.origin).hostname, "healthcheck.railway.app"]
+        if auth
+        else ["127.0.0.1", "localhost", "testserver"],
     )
+
+    register_auth(app, auth)
+    # One bounded budget for this local process; do not trust forwarded IP headers.
+    auth_attempts = deque()
 
     @app.middleware("http")
     async def local_origin(request, call_next):
         origin = request.headers.get("origin")
+        if auth and request.url.path.startswith("/api/"):
+            if (
+                request.method not in {"GET", "HEAD", "OPTIONS"}
+                and origin != auth.origin
+            ):
+                return Response(
+                    "Request origin does not match the app.", status_code=403
+                )
+            if request.method == "POST" and request.url.path in PUBLIC_ROUTES - {
+                "/api/health",
+                "/api/auth/session",
+                "/api/auth/logout",
+            }:
+                now = monotonic()
+                while auth_attempts and auth_attempts[0] <= now - 60:
+                    auth_attempts.popleft()
+                if len(auth_attempts) >= 30:
+                    return Response(
+                        "Too many authentication attempts. Try again in a minute.",
+                        status_code=429,
+                        headers={"Retry-After": "60", "Cache-Control": "no-store"},
+                    )
+                auth_attempts.append(now)
+            if request.url.path not in PUBLIC_ROUTES:
+                try:
+                    email = await run_in_threadpool(signed_in_email, auth, request)
+                except HTTPException as exc:
+                    return Response(
+                        str(exc.detail),
+                        status_code=exc.status_code,
+                        headers={"Cache-Control": "no-store"},
+                    )
+                if not email:
+                    return Response(
+                        "Sign in to access this workspace.",
+                        status_code=401,
+                        headers={"Cache-Control": "no-store"},
+                    )
         if (
-            request.method not in {"GET", "HEAD", "OPTIONS"}
+            not auth
+            and request.method not in {"GET", "HEAD", "OPTIONS"}
             and origin
             and origin
             not in {
@@ -87,6 +139,10 @@ def create_app(data_dir=None, frontend_dir=None):
                 status_code=403,
             )
         response = await call_next(request)
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
         if request.url.path.startswith("/api") or request.url.path in {
             "/",
             "/index.html",

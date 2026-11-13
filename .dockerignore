@@ -1,0 +1,16 @@
+# Allowlist: private local data never enters the build context.
+**
+!Dockerfile
+!requirements-reviewer.txt
+!frontend/
+!frontend/package.json
+!frontend/package-lock.json
+!frontend/tsconfig*.json
+!frontend/vite.config.ts
+!frontend/index.html
+!frontend/src/
+!frontend/src/**
+!reviewer/
+!reviewer/*.py
+!ocr_ingestion/
+!ocr_ingestion/*.py

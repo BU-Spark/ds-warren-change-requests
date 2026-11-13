@@ -10,6 +10,9 @@ export async function api<T>(
         : { "Content-Type": "application/json", ...options.headers },
   });
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/")) {
+      window.dispatchEvent(new Event("warren-session-ended"));
+    }
     const body = await response.json().catch(() => ({}));
     throw new Error(
       typeof body.detail === "string"

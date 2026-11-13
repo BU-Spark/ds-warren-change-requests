@@ -2,6 +2,7 @@
 
 from collections import Counter
 from dataclasses import dataclass
+from decimal import Decimal
 import hashlib
 import io
 from pathlib import Path
@@ -12,13 +13,13 @@ import pymupdf
 
 from .models import (
     DATE_FIELDS, FIELDS, LABOR_TYPES, NUMBER_FIELDS, RATE_FIELDS,
-    Extraction, Table, date, is_labor_rate, normalize_record, row_id,
+    Extraction, Table, date, is_labor_rate, normalize_record, number, row_id,
 )
 
 
 SUPPORTED = {".pdf", ".png", ".jpg", ".jpeg", ".tif", ".tiff"}
 DATE_RE = re.compile(r"\b\d{1,2}/\d{1,2}/(?:\d{4}|\d{2})\b")
-REFERENCE_RE = re.compile(r"\b(?:AD|CD|CR)\d{3,}(?:\.\d+)?[A-Z]*(?:R\d+)?\b", re.I)
+REFERENCE_RE = re.compile(r"\b(?:AD|CD|CR|UC)\d{3,}(?:\.\d+)?[A-Z]*(?:R\d+)?\b", re.I)
 TICKET_RE = re.compile(r"\b\d{3,5}-\d{3,8}\b")
 MAX_BYTES = 200 * 1024 * 1024
 
@@ -41,26 +42,40 @@ class Word:
 
 
 def _native_words(page) -> tuple[list[Word], int]:
-    spans = [span for block in page.get_text("dict")["blocks"] if "lines" in block
+    # Filter source spans, not rectangles: a correction can occupy the exact
+    # same coordinates as the original rate without replacing its PDF text.
+    spans = [span for block in page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)["blocks"] if "lines" in block
              for line in block["lines"] for span in line["spans"]]
-    base_fonts = {span["font"] for span in spans if span["color"] == 0 and span["text"].strip()}
-    removed = []
+    base_fonts = {span["font"] for span in spans if span["color"] == 0
+                  and any(c["c"].strip() for c in span["chars"])}
+    kept = []
+    removed = 0
     for span in spans:
-        text = span["text"].strip()
-        # Different-font colored overlays are present in the supplied flattened reviews.
-        # Colored source text in the document's normal fonts is preserved.
+        text = "".join(char["c"] for char in span["chars"])
         if any(mark in text for mark in "✓✔☑") or (
             span["color"] != 0 and base_fonts and span["font"] not in base_fonts
         ):
-            removed.append(pymupdf.Rect(span["bbox"]))
+            removed += 1
+        else:
+            kept.append(span)
     result = []
-    for x0, y0, x1, y1, text, *_ in page.get_text("words"):
-        center = pymupdf.Point((x0 + x1) / 2, (y0 + y1) / 2)
-        if any(center in rectangle for rectangle in removed):
-            continue
-        rectangle = pymupdf.Rect(x0, y0, x1, y1) * page.rotation_matrix
-        result.append(Word(*rectangle, text))
-    return result, len(removed)
+    if not removed:
+        for x0, y0, x1, y1, text, *_ in page.get_text("words"):
+            rectangle = pymupdf.Rect(x0, y0, x1, y1) * page.rotation_matrix
+            result.append(Word(*rectangle, text))
+        return result, 0
+    for span in kept:
+        token = []
+        for char in [*span["chars"], {"c": " "}]:
+            if not char["c"].isspace():
+                token.append(char)
+            elif token:
+                rectangle = pymupdf.Rect(token[0]["bbox"])
+                for item in token[1:]:
+                    rectangle |= pymupdf.Rect(item["bbox"])
+                result.append(Word(*(rectangle * page.rotation_matrix), "".join(item["c"] for item in token)))
+                token = []
+    return result, removed
 
 
 def _lines(words: list[Word]) -> list[list[Word]]:
@@ -168,6 +183,18 @@ def _detect_header(lines, index):
             if following_dates:
                 centers.append((sum(following_dates) / len(following_dates), "unlabeled_date_raw"))
             return "labor_tally", sorted(centers), False
+    if keys == ["time", "hrs", "hours", "time", "hrs", "rate", "rate", "rate"]:
+        # Two-line proposal heading: ST/OT/DT are explicit, not inferred from prices.
+        above = [w for row in lines[max(0, index - 2):index] for w in row]
+        top = [w for w in above if _key(w.text) in {"labor", "straight", "overtime", "double"}]
+        totals = [w for w in above if _key(w.text) == "totals"]
+        if [_key(w.text) for w in top] == ["labor", "straight", "overtime", "double", "straight", "overtime", "double"] and len(totals) == 1:
+            fields = ["position_original", "reg_hours", "ot_hours", "dt_hours", "reg_rate", "ot_rate", "dt_rate"]
+            return "labor_tally", _columns(top, fields) + [(totals[0].x, "total_amount")], True
+    if keys == ["trade", "hrs", "rate", "cost"]:
+        # Preserve printed trade abbreviations and generic billing basis. These
+        # proposal tables do not establish a work date or an approved rate.
+        return "labor", _columns(line, ["position_original", "hours", "rate", "extension_amount"]), True
     if {"description", "hrs", "rate", "extension", "total"}.issubset(keys):
         # ACME reuses these columns for Trucking. The printed section, rather
         # than a filename, contractor input, or rate value, determines its kind.
@@ -234,7 +261,8 @@ def _extract_known_tables(result, words, page_number, method, metadata):
             continue
         end = detected[n + 1][0] if n + 1 < len(detected) else len(lines)
         body = lines[index + 1:end]
-        if (method == "ocr" or kind == "unfamiliar") and not _has_tabular_body(lines[index], body, centers):
+        trade_table = [field for _, field in centers] == ["position_original", "hours", "rate", "extension_amount"]
+        if (method == "ocr" or kind == "unfamiliar" or trade_table) and not _has_tabular_body(lines[index], body, centers):
             continue
         table_id = f"p{page_number}-y{round(lines[index][0].y)}-{kind}"
         table = Table(table_id, page_number, kind, [field for _, field in centers], [],
@@ -245,13 +273,24 @@ def _extract_known_tables(result, words, page_number, method, metadata):
         for row_index, line in enumerate(body, 1):
             text = _text(line)
             upper = text.upper()
-            if re.match(r"^(?:TOTAL(?:S)?\b|SUBTOTAL\b)", upper):
+            if re.match(r"^(?:TOTAL(?:S)?\b|SUBTOTAL\b|LABOR\s+SUB[- ]?TOTAL\b)", upper):
                 break
             if re.match(r"^(?:SDC\s+(?:ADJUSTED|COMMENT)|ADJUSTED\s+TOTAL|REVIEWED\b|SIGNATURE\b|PREVIOUSLY\s+INVOICED|DUE THIS\b|PROJECTED\b)", upper):
                 break
             if kind == "labor_detail" and "BY CRAFT" in upper:
                 break
+            if trade_table and re.match(r"^(?:FREIGHT|HARDCOSTS|RENTAL|MATERIALS?|EQUIPMENT)\b", upper):
+                break
             cells = _split(line, centers)
+            if trade_table:
+                trade_values = dict(zip([field for _, field in centers], cells))
+                # Exclude blank templates and prose; retain malformed cells as
+                # review evidence without inventing numeric values.
+                if not any(trade_values.get(field, "").strip() not in {"", "-", "—", "–"}
+                           for field in ("hours", "extension_amount")):
+                    continue
+                if not any(character.isalpha() for character in trade_values.get("position_original", "")):
+                    continue
             table.rows.append(cells)
             values = {field: value for (_, field), value in zip(centers, cells) if not field.startswith("_")}
             if kind == "labor":
@@ -270,7 +309,8 @@ def _extract_known_tables(result, words, page_number, method, metadata):
                 description = values.get("description", "")
                 # Quote an explicitly printed role substring without mapping it to a tracker title.
                 role = re.match(r"^\d+(?:\.\d+)?\s+(.+?)\s+at\s+\d", description, re.I)
-                values["position_original"] = role.group(1) if role else ""
+                if not trade_table:
+                    values["position_original"] = role.group(1) if role else ""
                 premium = re.search(r"\bpremium\b.*", description, re.I)
                 values["rate_basis_raw"] = premium.group(0) if premium else ""
             if kind == "unfamiliar":
@@ -280,6 +320,14 @@ def _extract_known_tables(result, words, page_number, method, metadata):
                 for field in ("reg_hours", "ot_hours", "dt_hours", "reg_amount", "ot_amount", "dt_amount", "total_amount")
             ):
                 continue  # Blank BrandSafway template rows can contain preprinted rates.
+            if kind == "labor_tally" and centers[1][1] == "reg_hours":
+                # Proposal templates may include unused zero-hour rate lines.
+                try:
+                    if not any(Decimal(number(values.get(field, "")) or "0") != 0
+                               for field in ("reg_hours", "ot_hours", "dt_hours", "total_amount")):
+                        continue
+                except ValueError:
+                    pass  # Preserve malformed source cells for explicit review below.
             if kind == "labor_detail":
                 if not DATE_RE.fullmatch(values.get("work_start", "")):
                     continue
@@ -287,6 +335,10 @@ def _extract_known_tables(result, words, page_number, method, metadata):
             values["row_type"] = "labor"
             _record(result, table, row_index, values, metadata)
         if table.rows and (table.record_ids or kind == "unfamiliar"):
+            if trade_table:
+                result.issue(page_number, "trade_table_review_required",
+                             "Confirm printed trade abbreviations, generic rate basis, and missing work dates against the source.",
+                             table_id=table_id)
             tables.append(table)
     return tables
 
@@ -356,7 +408,7 @@ def _printed_scan_words(page, *, labor_only=False):
             return []
     keys = {_key(word.text) for word in probe}
     if not ({"rate", "hrs", "hours", "price", "amount", "extension"} & keys) or not (
-        {"description", "rating", "quantity", "item", "classification"} & keys
+        {"description", "rating", "quantity", "item", "classification", "trade"} & keys
     ):
         return []
     # Raster classification is deliberately not treated as proof that every value is printed.

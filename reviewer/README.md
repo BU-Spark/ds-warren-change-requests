@@ -18,6 +18,19 @@ Open **http://127.0.0.1:8000**. Build the frontend again after changing it. The 
 
 For frontend development, keep the Python server running and run `npm --prefix frontend run dev` in another terminal. Vite serves at http://127.0.0.1:5173 and proxies `/api` to the local backend.
 
+## Sign-in
+
+Accounts are invite-only and managed by this application. App admins generate
+private, single-use invitation and password-reset links; no email is sent and
+no external identity provider is used. Missing authentication settings stop
+startup. Configure `WARREN_PUBLIC_URL` and bootstrap an admin using the
+[account setup guide](AUTH_SETUP.md). A disposable synthetic local demo may
+explicitly use `WARREN_ALLOW_UNAUTHENTICATED=1` with no configured origin.
+
+See [Railway deployment](RAILWAY.md) for hosted PostgreSQL, file storage, domain
+configuration, and the first-admin command. Railway project permissions are
+separate from the app's admin role.
+
 ## Review workflow
 
 1. **Upload & review:** Choose **Upload document**, add a PDF, PNG, JPEG, or TIFF, enter the project and contractor, and extract labor rates. Processing opens **Documents in review**. You can switch back to Upload document while processing continues. Documents are limited to 200 MB.
@@ -76,9 +89,9 @@ Reviewers can save a contractor-specific equivalent job title targeting an actua
 
 Accepted rows remain in `data/document_line_items.csv` with the existing lock, append recovery, duplicate protection, and `document_line_items_private/` evidence. Equal-looking source rows remain distinct. Exact reuploads and renamed copies skip already-saved IDs; modified/rescanned documents remain separate versions.
 
-New originals are stored in `data/reviewer/uploads/`. `data/reviewer/reviewer.sqlite3` stores extraction sessions, immutable reference versions, active-reference selection, current comparison details, contractor-specific classification relationships, and immutable check-run snapshots. All are ignored by Git and stay local. Browser storage contains only tab/session/run identifiers. Refreshing or restarting preserves completed extraction and checks; interrupted jobs are marked failed and can be retried through reupload. A single extraction worker processes queued documents and exposes page progress.
+New originals are stored in `data/reviewer/uploads/`. PostgreSQL (when `DATABASE_URL` is set), or `data/reviewer/reviewer.sqlite3` locally, stores accounts, token hashes, extraction sessions, immutable reference versions, active-reference selection, current comparison details, contractor-specific classification relationships, and immutable check-run snapshots. These artifacts are excluded from Git; hosted database records stay in the configured PostgreSQL service. Browser storage contains only tab/session/run identifiers. Refreshing or restarting preserves completed extraction and checks; interrupted jobs are marked failed and can be retried through reupload. A single extraction worker processes queued documents and exposes page progress.
 
-`WARREN_DATA_DIR` can point to another local data directory, useful for isolated demos/tests. It must contain any intended reference and accepted dataset; the default is the repository's `data/`. The server runs on 127.0.0.1:8000. No cloud APIs, external fonts, accounts, or public hosting are used. Original documents, extracted worker information, evidence, and exported findings are sensitive local artifacts.
+`WARREN_DATA_DIR` can point to another local data directory, useful for isolated demos/tests. It must contain any intended reference and accepted dataset; the default is the repository's `data/`. The local server runs on 127.0.0.1:8000. Authentication is handled by the app. Railway deployments listen on the assigned port and require a PostgreSQL connection, an HTTPS public origin, and a persistent app volume; document processing stays on the reviewer server. Original documents, extracted worker information, evidence, and exported findings are sensitive local artifacts.
 
 ## Verification
 
