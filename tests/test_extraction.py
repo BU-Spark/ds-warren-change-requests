@@ -555,7 +555,7 @@ def test_scanned_ruled_heading_recovery_keeps_known_labor_layout(tmp_path, monke
     assert result.tables[0].requires_review
 
 
-def test_tally_preprinted_rates_without_work_entries_stay_excluded(tmp_path):
+def test_tally_preprinted_rates_without_work_entries_are_retained(tmp_path):
     source = write_pdf(
         tmp_path / "tally.pdf",
         [
@@ -588,5 +588,8 @@ def test_tally_preprinted_rates_without_work_entries_stay_excluded(tmp_path):
         ],
     )
     result = extract_document(source, use_ocr=False)
-    assert len(result.records) == 1
+    assert len(result.records) == 2
     assert result.records[0]["reg_hours"] == "4"
+    assert result.records[1]["reg_rate"] == "10.00"
+    assert result.records[1]["reg_hours"] == result.records[1]["total_amount"] == ""
+    assert result.records[0]["record_id"] != result.records[1]["record_id"]

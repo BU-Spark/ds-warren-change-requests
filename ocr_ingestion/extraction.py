@@ -2,7 +2,6 @@
 
 from collections import Counter
 from dataclasses import dataclass
-from decimal import Decimal
 import hashlib
 import io
 from pathlib import Path
@@ -13,7 +12,7 @@ import pymupdf
 
 from .models import (
     DATE_FIELDS, FIELDS, LABOR_TYPES, NUMBER_FIELDS, RATE_FIELDS,
-    Extraction, Table, date, is_labor_rate, normalize_record, number, row_id,
+    Extraction, Table, date, is_labor_rate, normalize_record, row_id,
 )
 
 
@@ -310,11 +309,6 @@ def _extract_known_tables(result, words, page_number, method, metadata, *, consu
             cells = _split(line, centers)
             if trade_table:
                 trade_values = dict(zip([field for _, field in centers], cells))
-                # Exclude blank templates and prose; retain malformed cells as
-                # review evidence without inventing numeric values.
-                if not any(trade_values.get(field, "").strip() not in {"", "-", "—", "–"}
-                           for field in ("hours", "extension_amount")):
-                    continue
                 if not any(character.isalpha() for character in trade_values.get("position_original", "")):
                     continue
             table.rows.append(cells)
@@ -343,37 +337,19 @@ def _extract_known_tables(result, words, page_number, method, metadata, *, consu
                 if consumed_rows is not None:
                     consumed_rows.add(_source_line_key(line))
                 continue  # Users explicitly map the raw table before records are created.
-            if kind in {"labor_detail", "labor_tally"} and not worker_ledger and not any(
-                values.get(field, "").strip() not in {"", "-", "—", "–"}
-                for field in ("hours", "reg_hours", "ot_hours", "dt_hours", "reg_amount", "ot_amount", "dt_amount", "total_amount")
-            ):
-                continue  # Blank BrandSafway template rows can contain preprinted rates.
-            if kind == "labor_tally" and centers[1][1] == "reg_hours":
-                # Proposal templates may include unused zero-hour rate lines.
-                try:
-                    if not any(Decimal(number(values.get(field, "")) or "0") != 0
-                               for field in ("reg_hours", "ot_hours", "dt_hours", "total_amount")):
-                        continue
-                except ValueError:
-                    pass  # Preserve malformed source cells for explicit review below.
+            # Capture printed hourly prices, including unused roles. Hours and
+            # billed amounts do not determine whether a labeled rate is usable.
+            # _record still rejects rows without an explicit rate/source label.
             if worker_ledger:
                 values["contractor"] = ""  # A packet-level company is not worker-employer evidence.
                 if not any(values.get(field, "").strip() for field in ("worker_name", "description", "ticket_id", "work_start")):
                     continue  # Craft-only totals are not worker-detail rows, even if OCR splits "By Craft".
-                try:
-                    printed_work = [number(values[field]) for field in ("hours", "total_amount")
-                                    if values.get(field, "").strip() not in {"", "-", "—", "–"}]
-                    if printed_work and all(Decimal(value) == 0 for value in printed_work):
-                        continue
-                except ValueError:
-                    pass  # Keep invalid cells visible for review, never invent values.
             if kind == "labor_detail":
                 if not DATE_RE.fullmatch(values.get("work_start", "")):
-                    if not worker_ledger:
-                        continue
-                    result.issue(page_number, "unresolved_field", "Confirm the ledger work date against the source.",
+                    result.issue(page_number, "unresolved_field", "Confirm the printed work date against the source.",
                                  table_id=table_id, row_index=row_index, field="work_start", raw=values.get("work_start", ""))
                     values["work_start"] = ""
+                    table.requires_review = True
                 values["work_end"] = values["work_start"]
             values["row_type"] = "labor"
             previous_count = len(table.record_ids)
@@ -428,8 +404,6 @@ def _extract_labor_items(result, words, page_number, method, metadata, *, consum
         if not match:
             continue
         label, hours, rate, amount = match.groups()
-        if Decimal(hours) == 0:
-            continue
         table_id = f"p{page_number}-y{round(line[0].y)}-labor_item"
         values = {"row_type": "labor", "description": label, "position_original": label,
                   "hours": hours, "rate": rate, "total_amount": amount,

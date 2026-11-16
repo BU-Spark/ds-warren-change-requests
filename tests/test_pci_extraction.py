@@ -147,8 +147,9 @@ def test_proposals_statements_zeros_and_missing_values(tmp_path):
         ],
         contractor="Packet Company",
     )
-    assert len(result.records) == 3
-    assert [r["rate"] for r in result.records] == ["20.00", "20.00", "0.00"]
+    assert len(result.records) == 4
+    assert [r["rate"] for r in result.records] == ["20.00", "20.00", "20.00", "0.00"]
+    assert result.records[2]["hours"] == "0"
     assert all(
         r["work_start"] == r["contractor"] == r["reg_rate"] == ""
         for r in result.records

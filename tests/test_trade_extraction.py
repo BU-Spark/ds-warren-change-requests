@@ -59,11 +59,12 @@ def test_trade_stops_at_supporting_costs(tmp_path, ending):
     assert len(result.records) == 1
 
 
-def test_trade_blank_templates_and_prose_do_not_become_labor(tmp_path):
+def test_trade_rate_only_rows_are_retained_but_prose_is_not_labor(tmp_path):
     lines = trade_lines()[:2] + [(120, [(20, "CF"), (280, "123.45")])]
-    assert not extract_document(
-        write_pdf(tmp_path / "blank.pdf", lines), use_ocr=False
-    ).records
+    result = extract_document(write_pdf(tmp_path / "blank.pdf", lines), use_ocr=False)
+    assert len(result.records) == 1
+    assert result.records[0]["rate"] == "123.45"
+    assert result.records[0]["hours"] == result.records[0]["extension_amount"] == ""
     prose = [(100, [(20, "Trade Hrs Rate Cost")]), (120, [(20, "CF 8 123.45 987.60")])]
     assert not extract_document(
         write_pdf(tmp_path / "prose.pdf", prose), use_ocr=False
@@ -166,13 +167,13 @@ def proposal_lines():
     ]
 
 
-def test_multiline_proposal_preserves_explicit_rate_types_and_skips_unused_rows(
+def test_multiline_proposal_preserves_explicit_rate_types_and_unused_roles(
     tmp_path,
 ):
     result = extract_document(
         write_pdf(tmp_path / "proposal.pdf", proposal_lines()), use_ocr=False
     )
-    assert len(result.records) == 1
+    assert len(result.records) == 2
     row = result.records[0]
     assert (
         row["position_original"],
@@ -183,6 +184,10 @@ def test_multiline_proposal_preserves_explicit_rate_types_and_skips_unused_rows(
     assert row["reg_hours"] == "8" and row["ot_hours"] == "2"
     assert row["work_start"] == row["contractor"] == ""
     assert result.tables[0].requires_review
+    assert result.records[1]["position_original"] == "Shop Fabrication"
+    assert result.records[1]["reg_rate"] == "25.00"
+    assert result.records[1]["reg_hours"] == "0"
+    assert result.records[1]["total_amount"] == "0.00"
 
 
 def write_worker_ledger(path, lines):
@@ -286,7 +291,7 @@ def test_worker_ledger_preserves_rates_dates_and_requires_review(tmp_path):
         append_records(result, tmp_path / "rows.csv", [row["record_id"]])
 
 
-def test_worker_ledger_excludes_zero_work_and_retains_unresolved_date(tmp_path):
+def test_worker_ledger_retains_zero_work_and_unresolved_date(tmp_path):
     lines = worker_ledger_lines()
     lines[1] = (
         110,
@@ -299,10 +304,11 @@ def test_worker_ledger_excludes_zero_work_and_retains_unresolved_date(tmp_path):
     result = extract_document(
         write_worker_ledger(tmp_path / "ledger.pdf", lines), use_ocr=False
     )
-    assert len(result.records) == 1
-    assert result.records[0]["ticket_id"] == "1002"
-    assert result.records[0]["work_start"] == result.records[0]["work_end"] == ""
-    assert result.records[0]["rate"] == "20.00"
+    assert len(result.records) == 2
+    assert result.records[0]["hours"] == result.records[0]["total_amount"] == "0"
+    assert result.records[1]["ticket_id"] == "1002"
+    assert result.records[1]["work_start"] == result.records[1]["work_end"] == ""
+    assert result.records[1]["rate"] == "20.00"
     assert any(issue["code"] == "unresolved_field" for issue in result.issues)
 
 
