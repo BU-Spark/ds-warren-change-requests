@@ -53,6 +53,7 @@ EXPORT_FIELDS = [
     "bu_approval_received",
     "review_details",
     "finding_kind",
+    "reason",
     "contractor_original",
     "match_method",
     "match_explanation",
@@ -245,16 +246,25 @@ def compare(
                         f"({start} to {end}). Check the dates or split work across "
                         "schedule periods using the work-date controls for selected pages or rows."
                     )
-                    periods = sorted({
-                        (r["position"], r["effective_time_period_start"],
-                         r["effective_time_period_finish"])
-                        for r in overlaps
-                    })
+                    periods = sorted(
+                        {
+                            (
+                                r["position"],
+                                r["effective_time_period_start"],
+                                r["effective_time_period_finish"],
+                            )
+                            for r in overlaps
+                        }
+                    )
                     if periods:
-                        reason += " Approved schedules overlapping the entered dates: " + "; ".join(
-                            f"{position}: {first} to {last}"
-                            for position, first, last in periods
-                        ) + "."
+                        reason += (
+                            " Approved schedules overlapping the entered dates: "
+                            + "; ".join(
+                                f"{position}: {first} to {last}"
+                                for position, first, last in periods
+                            )
+                            + "."
+                        )
                     else:
                         reason += " No approved candidate schedule overlaps the entered dates."
                 elif not approved:
@@ -311,6 +321,36 @@ def compare(
                     result["match_explanation"] = (
                         "Checked by contractor, work dates and approved rate; the printed classification was not recognized. "
                         + result["match_explanation"]
+                    )
+            if result["outcome"] == "difference":
+                other_periods = sorted(
+                    {
+                        (
+                            r["position"],
+                            r["effective_time_period_start"],
+                            r["effective_time_period_finish"],
+                        )
+                        for r in valid
+                        if key(r["status"]) == "approved"
+                        and r[rate_field] != ""
+                        and Decimal(r[rate_field]) == Decimal(number(submitted))
+                        and not (
+                            r["effective_time_period_start"] <= start
+                            and r["effective_time_period_finish"] >= end
+                        )
+                    }
+                )
+                if other_periods:
+                    result["finding_kind"] = "rate_outside_work_period"
+                    reason = (
+                        f"This rate exists in approved schedules for the mapped category, "
+                        f"but those schedules do not cover the entered work period ({start} to {end}). "
+                        "Matching reference periods: "
+                        + "; ".join(
+                            f"{position}: {first} to {last}"
+                            for position, first, last in other_periods
+                        )
+                        + ". Confirm the actual work dates; this is not an applicable rate match."
                     )
             if chosen or len(applicable) == 1:
                 primary = chosen[0] if chosen else applicable[0]

@@ -240,3 +240,36 @@ test("print PDF includes all pages, source evidence and outdated warning without
   await dialog.getByRole("button", { name: "Close dialog" }).click();
   await expect(page.locator("#pci-print-root")).toHaveCount(0);
 });
+
+test("a historical category rate is identified as outside the entered work period", async ({
+  page,
+}) => {
+  const outside = {
+    ...finding("outside", "document-a", "difference", "Example Contractor"),
+    classification: "Operator",
+    finding_kind: "rate_outside_work_period",
+    reason:
+      "This rate exists in approved schedules for the mapped category, but those schedules do not cover the entered work period (2026-01-02 to 2026-01-02). Matching reference periods: Operating Engineer Journey Person: 2025-06-01 to 2025-11-30. Confirm the actual work dates; this is not an applicable rate match.",
+  };
+  await setup(page, run([outside]));
+  await expect(
+    page.getByText("Outside approved period", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Not in approved rates", { exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText(
+    "Operating Engineer Journey Person: 2025-06-01 to 2025-11-30",
+  );
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Print PCI report", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText(
+    "Operating Engineer Journey Person: 2025-06-01 to 2025-11-30",
+  );
+  await expect(
+    page.getByRole("dialog").locator(".report-metrics"),
+  ).toContainText("Rate differences");
+});

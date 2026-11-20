@@ -507,3 +507,141 @@ def test_blended_fix_does_not_narrow_existing_trade_family_candidates():
         "Carpenter Foreperson (Example Supervisor)"
     ]
     assert result["match_method"] == "trade_family"
+
+
+@pytest.mark.parametrize(
+    "source_role,target_role",
+    [
+        ("Laborer", "Laborer Journey Person"),
+        ("Operator", "Operating Engineer Journey Person"),
+    ],
+)
+def test_broad_category_rate_membership_is_distinguished_from_work_date_eligibility(
+    source_role, target_role
+):
+    ref = reference(
+        [
+            schedule(
+                position=target_role,
+                effective_time_period_start="2025-06-01",
+                effective_time_period_finish="2025-11-30",
+                reg_rate="10.00",
+            ),
+            schedule(
+                source_csv_row_number="3",
+                position=target_role,
+                effective_time_period_start="2025-12-01",
+                effective_time_period_finish="2026-05-31",
+                reg_rate="12.00",
+            ),
+        ]
+    )
+    source = record(
+        position_original=source_role,
+        reg_rate="12.00",
+        work_start="2026-01-01",
+        work_end="2026-01-01",
+    )
+    valid = compare([source], ref, {}, "valid")[0]
+    assert valid["outcome"] == "match"
+    assert valid["matched_classifications"] == [target_role]
+    assert valid["match_method"] == "trade_family"
+    wrong_date = compare(
+        [{**source, "work_start": "2025-10-01", "work_end": "2025-10-01"}],
+        ref,
+        {},
+        "outside",
+    )[0]
+    assert wrong_date["outcome"] == "difference"
+    assert wrong_date["finding_kind"] == "rate_outside_work_period"
+    assert target_role in wrong_date["reason"]
+    assert "2025-12-01 to 2026-05-31" in wrong_date["reason"]
+    assert (
+        wrong_date["approved_rate"] == "10.00"
+        and wrong_date["difference_per_hour"] == "2.00"
+    )
+    assert wrong_date["reference_rows"] == ["2"]
+    exported = list(csv.DictReader(io.StringIO(differences_csv([wrong_date]))))[0]
+    assert exported["finding_kind"] == "rate_outside_work_period"
+    assert target_role in exported["reason"]
+
+
+@pytest.mark.parametrize(
+    "other_row",
+    [
+        {
+            "subcontractor": "Other Company",
+            "position": "Laborer Journey Person",
+            "status": "Approved",
+        },
+        {
+            "subcontractor": "Example Contractor",
+            "position": "Laborer Foreperson",
+            "status": "Approved",
+        },
+        {
+            "subcontractor": "Example Contractor",
+            "position": "Laborer Journey Person",
+            "status": "Pending Approval",
+        },
+    ],
+)
+def test_outside_period_hint_never_uses_other_contractors_grades_or_unapproved_rates(
+    other_row,
+):
+    ref = reference(
+        [
+            schedule(position="Laborer Journey Person", reg_rate="12.00"),
+            schedule(
+                source_csv_row_number="3",
+                effective_time_period_start="2025-06-01",
+                effective_time_period_finish="2025-11-30",
+                reg_rate="10.00",
+                **other_row,
+            ),
+        ]
+    )
+    result = compare(
+        [record(position_original="Laborer Journeyman", reg_rate="10.00")],
+        ref,
+        {},
+        "scoped",
+    )[0]
+    assert result["outcome"] == "difference"
+    assert result["finding_kind"] != "rate_outside_work_period"
+    assert "Matching reference periods" not in result["reason"]
+
+
+@pytest.mark.parametrize(
+    "source_role,target_role",
+    [
+        ("Laborer", "Laborer Journey Person"),
+        ("Operator", "Operating Engineer Journey Person"),
+    ],
+)
+@pytest.mark.parametrize("generic_start", ["2026-01-01", "2026-06-01"])
+def test_exact_generic_category_does_not_hide_eligible_journey_person_schedules(
+    source_role, target_role, generic_start
+):
+    ref = reference(
+        [
+            schedule(
+                position=source_role,
+                effective_time_period_start=generic_start,
+                reg_rate="99.00",
+            ),
+            schedule(
+                source_csv_row_number="3",
+                position=target_role,
+                effective_time_period_finish="2026-05-31",
+                reg_rate="12.00",
+            ),
+        ]
+    )
+    source = record(position_original=source_role, reg_rate="12.00")
+    result = compare([source], ref, {}, "category")[0]
+    assert result["outcome"] == "match"
+    assert result["matched_classifications"] == [target_role]
+    assert result["reference_rows"] == ["3"]
+    assert result["match_method"] == "trade_family"
+    assert source["position_original"] == source_role

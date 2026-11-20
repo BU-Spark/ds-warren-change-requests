@@ -390,7 +390,7 @@ def create_app(data_dir=None, frontend_dir=None):
     def saved_documents():
         with operation_lock:
             records = saved_records()
-            return library(records, state.list("session"))
+            return library(records, state.list("session"), details())
 
     def get_deletion_plan(document_id=None, session_id=None):
         finish_deletions(state, data)

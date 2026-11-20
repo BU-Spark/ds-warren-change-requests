@@ -25,7 +25,8 @@ def managed_folder(data, folder):
     return path
 
 
-def library(records, sessions):
+def library(records, sessions, comparison_details=None):
+    comparison_details = comparison_details or {}
     grouped = {}
     for record in records:
         grouped.setdefault(record["document_id"], []).append(record)
@@ -42,7 +43,16 @@ def library(records, sessions):
                 "filename": latest["filename"] if latest else rows[0]["source_file"],
                 "projects": sorted({r["project"] for r in rows if r.get("project")}),
                 "contractors": sorted(
-                    {r["contractor"] for r in rows if r.get("contractor")}
+                    {
+                        contractor
+                        for r in rows
+                        if (
+                            contractor := comparison_details.get(
+                                r["record_id"], {}
+                            ).get("contractor")
+                            or r.get("contractor")
+                        )
+                    }
                 ),
                 "record_ids": [r["record_id"] for r in rows],
                 "saved_rows": len(rows),

@@ -7,6 +7,7 @@ type Props = {
   finding: Finding | null;
   previewRow: Row | null;
   records: Row[];
+  comparisonDetails?: Record<string, Row>;
   rulesChanged?: boolean;
   onClose: () => void;
   onEdit: (ids: string[]) => void;
@@ -15,11 +16,18 @@ export default function FindingDialog({
   finding,
   previewRow,
   records,
+  comparisonDetails = {},
   rulesChanged,
   onClose,
   onEdit,
 }: Props) {
   if (!finding && !previewRow) return null;
+  const enteredContractor = previewRow
+    ? comparisonDetails[previewRow.record_id]?.contractor
+    : "";
+  const contractor = finding
+    ? finding.contractor
+    : enteredContractor || previewRow?.contractor;
   return (
     <Modal
       title={finding ? "Labor rate finding" : "Saved labor record"}
@@ -32,11 +40,7 @@ export default function FindingDialog({
             <span className="eyebrow">
               {finding ? "COMPARISON RESULT" : "SOURCE RECORD"}
             </span>
-            <h3>
-              {finding?.contractor ||
-                previewRow?.contractor ||
-                "Contractor needed"}
-            </h3>
+            <h3>{contractor || "Contractor needed"}</h3>
             <p>
               {finding?.classification ||
                 previewRow?.position_original ||
@@ -146,16 +150,34 @@ export default function FindingDialog({
           </>
         )}
         {previewRow && (
-          <dl className="record-details">
-            {Object.entries(previewRow)
-              .filter(([key, value]) => key !== "rate_basis_raw" && value)
-              .map(([k, v]) => (
-                <div key={k}>
-                  <dt>{labels[k] || k.replaceAll("_", " ")}</dt>
-                  <dd>{v}</dd>
-                </div>
-              ))}
-          </dl>
+          <>
+            <p className="notice">
+              <strong>Contractor used for comparisons:</strong>{" "}
+              {contractor || "Needs confirmation"}
+              {enteredContractor
+                ? " · Reviewer entered"
+                : contractor
+                  ? " · Upload/source"
+                  : ""}
+              <br />
+              <strong>Original contractor:</strong>{" "}
+              {previewRow.contractor || "Not provided"}
+            </p>
+            <dl className="record-details">
+              {Object.entries(previewRow)
+                .filter(([key, value]) => key !== "rate_basis_raw" && value)
+                .map(([k, v]) => (
+                  <div key={k}>
+                    <dt>
+                      {k === "contractor"
+                        ? "Original contractor"
+                        : labels[k] || k.replaceAll("_", " ")}
+                    </dt>
+                    <dd>{v}</dd>
+                  </div>
+                ))}
+            </dl>
+          </>
         )}
         <p className="fine-print">
           {(finding || previewRow)!.source_file} · Page{" "}
@@ -166,7 +188,7 @@ export default function FindingDialog({
           url={`/api/documents/${(finding || previewRow)!.document_id}/pages/${(finding || previewRow)!.source_page}`}
         />
         <div className="modal-actions">
-          {!(finding || previewRow)!.contractor && (
+          {!contractor && (
             <button
               className="secondary"
               onClick={() =>

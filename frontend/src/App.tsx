@@ -65,7 +65,7 @@ import type {
 
 import {
   formatDate,
-  withWorkDates,
+  withComparisonDetails,
   money,
   display,
   short,
@@ -598,10 +598,10 @@ export default function App({
         `${deleteTarget.preview.filename} deleted. Upload it again to start a fresh review.`,
       );
     });
-  const filteredRows = searchRows(
-    rows.map((r) => withWorkDates(r, details[r.record_id])),
-    search,
-  )
+  const displayRows = rows.map((r) =>
+    withComparisonDetails(r, details[r.record_id]),
+  );
+  const filteredRows = searchRows(displayRows, search)
     .filter(matchesFilters)
     .filter((r) => !savedDataDocument || r.document_id === savedDataDocument);
   const scopedResults = (currentRun?.results || [])
@@ -621,7 +621,10 @@ export default function App({
     session?.extraction?.records
       .filter((r) => Number(r.source_page) === page)
       .map((r) =>
-        withWorkDates(r, session.comparison_details?.[r.record_id]),
+        withComparisonDetails(
+          r,
+          details[r.record_id] || session.comparison_details?.[r.record_id],
+        ),
       ) || [];
   const selectedForSave =
     session?.extraction?.records.filter((r) =>
@@ -1672,7 +1675,7 @@ export default function App({
                           ))}
                         </select>
                       </label>
-                      {filterBar(rows)}
+                      {filterBar(displayRows)}
                       <div className="table-actions">
                         <span>
                           {filteredRows.length} of {rows.length} records
@@ -1709,10 +1712,11 @@ export default function App({
                         Show technical columns and full IDs
                       </label>
                       <p className="table-note">
-                        Dates include reviewer entries used for comparisons;
-                        open a record to inspect original printed values. Blank
-                        values are unknown. Short record IDs are display labels;
-                        full IDs are preserved in evidence and exports.
+                        Contractors and dates include reviewer entries used for
+                        comparisons; open a record to inspect original printed
+                        values. Blank values are unknown. Short record IDs are
+                        display labels; full IDs are preserved in evidence and
+                        exports.
                       </p>
                     </>
                   ) : (
@@ -1986,7 +1990,20 @@ export default function App({
                                     </td>
                                     <td>
                                       {f.finding_kind ===
-                                      "rate_not_in_schedule" ? (
+                                      "rate_outside_work_period" ? (
+                                        <>
+                                          <Pill tone="warn">
+                                            Outside approved period
+                                          </Pill>
+                                          {f.difference_per_hour && (
+                                            <small className="delta">
+                                              {money(f.difference_per_hour)} /
+                                              hour
+                                            </small>
+                                          )}
+                                        </>
+                                      ) : f.finding_kind ===
+                                        "rate_not_in_schedule" ? (
                                         <Pill tone="bad">
                                           Not in approved rates
                                         </Pill>
@@ -2238,6 +2255,7 @@ export default function App({
             setPreviewRow(null);
           }}
           onEdit={openEdit}
+          comparisonDetails={details}
         />
       )}
       {editIds.length > 0 && (

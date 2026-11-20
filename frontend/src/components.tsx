@@ -120,6 +120,7 @@ export function RowsTable({
     "project",
     "project_id",
     "contractor",
+    "contractor_source",
     "position_original",
     "worker_name",
     "description",

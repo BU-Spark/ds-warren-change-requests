@@ -14,6 +14,8 @@ export const labels: Record<string, string> = {
   source_page: "Page",
   project_id: "Project ID (filename)",
   contractor: "Contractor",
+  contractor_source: "Contractor source",
+  source_contractor: "Original contractor",
   project: "Project",
   document_reference: "Reference",
   ticket_id: "Ticket",
@@ -50,13 +52,20 @@ export const rateTypeLabel = (type: string) =>
     DT: "Double time (DT)",
   })[type] || "Recheck required";
 
-export function withWorkDates(
+export function withComparisonDetails(
   row: Record<string, string>,
   supplied: Record<string, string> = {},
 ): Record<string, string> {
   const start = supplied.work_start || row.work_start;
   return {
     ...row,
+    contractor: supplied.contractor || row.contractor,
+    source_contractor: row.contractor || "",
+    contractor_source: supplied.contractor
+      ? "Reviewer entered"
+      : row.contractor
+        ? "Upload/source"
+        : "Missing — needs confirmation",
     work_start: start,
     work_end: supplied.work_end || row.work_end || start,
     work_date_source:
