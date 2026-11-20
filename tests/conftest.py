@@ -9,6 +9,8 @@ def isolated_auth_environment(monkeypatch):
         "WARREN_SUPABASE_URL",
         "WARREN_SUPABASE_PUBLISHABLE_KEY",
         "WARREN_PUBLIC_URL",
+        "WARREN_ACCESS_CODE",
+        "WARREN_AUTH_MODE",
         "WARREN_ALLOWED_EMAILS",
         "RAILWAY_ENVIRONMENT_ID",
         "RAILWAY_PUBLIC_DOMAIN",
@@ -18,3 +20,4 @@ def isolated_auth_environment(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("WARREN_ALLOW_UNAUTHENTICATED", "1")
+    monkeypatch.setenv("WARREN_AUTH_MODE", "accounts")

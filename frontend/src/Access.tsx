@@ -5,7 +5,12 @@ import AccountDialog from "./AccountDialog";
 import { api, json } from "./api";
 import "./access.css";
 
-type Session = { enabled: boolean; email: string | null; role?: string | null };
+type Session = {
+  enabled: boolean;
+  email: string | null;
+  role?: string | null;
+  mode?: "code" | "accounts";
+};
 type Mode = "login" | "confirm" | "reset";
 type AccessLink = { kind: "invite" | "recovery"; token: string };
 
@@ -29,6 +34,7 @@ export default function Access() {
   const [session, setSession] = useState<Session>();
   const [mode, setMode] = useState<Mode>(accessLink ? "confirm" : "login");
   const [email, setEmail] = useState("");
+  const codeMode = session?.mode === "code";
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
   const [notice, setNotice] = useState("");
@@ -39,7 +45,10 @@ export default function Access() {
   function reloadSession() {
     setError("");
     api<Session>("/auth/session")
-      .then(setSession)
+      .then((next) => {
+        setSession(next);
+        if (next.mode === "code") setMode("login");
+      })
       .catch(() =>
         setError(
           "Could not connect to the workspace. Check that the app is running.",
@@ -49,7 +58,7 @@ export default function Access() {
   useEffect(() => {
     reloadSession();
     const expired = () => {
-      setSession({ enabled: true, email: null });
+      setSession((previous) => ({ ...previous, enabled: true, email: null }));
       setMode("login");
       setManageAccounts(false);
       setError("Your session ended. Sign in again to continue.");
@@ -80,16 +89,16 @@ export default function Access() {
       } else if (mode === "login") {
         const result = await api<{ email: string; role: string }>(
           "/auth/login",
-          json("POST", { email, password }),
+          json("POST", codeMode ? { code: password } : { email, password }),
         );
-        setSession({ enabled: true, ...result });
+        setSession({ enabled: true, mode: session?.mode, ...result });
         changeMode("login");
       } else {
         const result = await api<{ message: string }>(
           "/auth/reset",
           json("POST", { password }),
         );
-        setSession({ enabled: true, email: null });
+        setSession((previous) => ({ ...previous, enabled: true, email: null }));
         changeMode("login");
         setNotice(result.message);
       }
@@ -111,7 +120,7 @@ export default function Access() {
       await api("/auth/logout", json("POST", {}));
       changeMode("login");
       setManageAccounts(false);
-      setSession({ enabled: true, email: null });
+      setSession((previous) => ({ ...previous, enabled: true, email: null }));
     } catch {
       setError("Could not sign out. Try again.");
     } finally {
@@ -149,7 +158,9 @@ export default function Access() {
         : "Set your password";
   const summary =
     mode === "login"
-      ? "Use your invited account to access the review workspace."
+      ? codeMode
+        ? "Enter your project access code to open the review workspace."
+        : "Use your invited account to access the review workspace."
       : mode === "confirm"
         ? "Continue to accept your invitation or reset your password."
         : "Choose a password of at least 12 characters.";
@@ -185,7 +196,7 @@ export default function Access() {
           <>
             <p className="access-summary">{summary}</p>
             <form onSubmit={submit} className="access-form">
-              {mode === "login" && (
+              {mode === "login" && !codeMode && (
                 <label>
                   Email
                   <input
@@ -201,13 +212,19 @@ export default function Access() {
               )}
               {mode !== "confirm" && (
                 <label>
-                  {mode === "reset" ? "New password" : "Password"}
+                  {codeMode
+                    ? "Access code"
+                    : mode === "reset"
+                      ? "New password"
+                      : "Password"}
                   <input
-                    name="password"
+                    name={codeMode ? "code" : "password"}
                     type="password"
                     autoComplete={
                       mode === "login" ? "current-password" : "new-password"
                     }
+                    autoCapitalize="none"
+                    spellCheck={false}
                     minLength={mode === "login" ? 1 : 12}
                     maxLength={128}
                     value={password}
@@ -250,8 +267,9 @@ export default function Access() {
               </button>
             </form>
             <p className="access-summary">
-              Need an invitation or password reset? Contact your project team
-              for a private access link.
+              {codeMode
+                ? "Contact your project team if you need the access code."
+                : "Need an invitation or password reset? Contact your project team for a private access link."}
             </p>
             {mode !== "login" && (
               <div className="access-links">

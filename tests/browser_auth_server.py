@@ -18,6 +18,7 @@ if __name__ == "__main__":
         "RAILWAY_PUBLIC_DOMAIN",
     ):
         os.environ.pop(name, None)
+    os.environ["WARREN_AUTH_MODE"] = "accounts"
     os.environ["WARREN_PUBLIC_URL"] = "http://127.0.0.1:8001"
     with tempfile.TemporaryDirectory(prefix="warren-auth-browser-") as folder:
         app = create_app(Path(folder))

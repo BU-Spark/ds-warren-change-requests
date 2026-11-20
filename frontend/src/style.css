@@ -718,7 +718,7 @@ label small {
   color: #64758b;
   font-size: 10px;
 }
-.recent-list > button {
+.recent-list .review-document-open {
   display: flex;
   align-items: center;
   width: 100%;
@@ -728,10 +728,10 @@ label small {
   text-align: left;
   background: white;
 }
-.recent-list > button:hover {
+.recent-list .review-document-open:hover {
   background: #fafbfd;
 }
-.recent-list > button:last-child {
+.recent-list .review-document-open:last-child {
   border-bottom: 0;
 }
 .document-icon {
@@ -764,7 +764,7 @@ label small {
   color: #64758b;
   margin-top: 3px;
 }
-.recent-list > button > svg {
+.recent-list .review-document-open > svg {
   color: #64758b;
 }
 .message {
@@ -1802,11 +1802,11 @@ summary {
   .recent .card-heading {
     padding: 18px;
   }
-  .recent-list > button {
+  .recent-list .review-document-open {
     padding: 14px 15px;
     gap: 9px;
   }
-  .recent-list > button .pill {
+  .recent-list .review-document-open .pill {
     font-size: 8px;
     padding: 3px 5px;
   }
@@ -1816,7 +1816,7 @@ summary {
   .recent-name small {
     font-size: 8px;
   }
-  .recent-list > button > svg {
+  .recent-list .review-document-open > svg {
     display: none;
   }
   .recent-name {

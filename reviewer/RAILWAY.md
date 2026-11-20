@@ -4,7 +4,8 @@ The app service and PostgreSQL are separate services in the **same project and
 environment**. The repo supplies a Dockerfile and Railway configuration. The
 image builds React and installs Python runtime dependencies plus Tesseract;
 notebooks, local credentials, and client documents are excluded from its build
-context. No account, password, or private data is embedded in the image.
+context. The initial shared access code is 1234; override it with
+`WARREN_ACCESS_CODE` before sharing client access. No private documents are embedded in the image.
 
 ## Dashboard setup
 
@@ -47,7 +48,23 @@ Railway documents [PostgreSQL](https://docs.railway.com/databases/postgresql),
 [volumes](https://docs.railway.com/volumes), and
 [healthchecks](https://docs.railway.com/deployments/healthchecks).
 
-## First admin and smoke check
+## Access code and smoke check
+
+The default login needs only the shared access code **1234**; no first-admin
+command is required. To change it, set `WARREN_ACCESS_CODE` on the **app service**
+to 4–128 letters/numbers and redeploy. Codes are case-sensitive. Use a longer
+code for client access. Changing it revokes existing code sessions; sign-out
+also revokes the current session. Access lasts one hour. Everyone with this
+code shares reviewer access, including document deletion.
+
+`WARREN_AUTH_MODE=code` is the default; remove an existing `accounts` override
+or set it to `code` for the simplified screen. The database, volume and public
+URL settings above remain required. Verify wrong codes are rejected and test
+sign-in, a synthetic upload/save/check, sign-out and restart.
+
+## Optional first admin for account mode
+
+The instructions below apply only with `WARREN_AUTH_MODE=accounts`.
 
 After the service starts successfully, an authorized project operator runs this
 **inside the deployed app container**, using its existing variables:
@@ -70,8 +87,8 @@ synthetic PDF upload, save, check, sign-out, and restart before using real data.
 
 ## Storage and existing data
 
-PostgreSQL stores accounts, session-token hashes, access-link hashes, review
-sessions, comparison details, immutable reference versions and check runs.
+PostgreSQL stores shared-code session hashes, accounts, account session-token
+hashes, access-link hashes, review sessions, comparison details, immutable reference versions and check runs.
 The app volume stores accepted CSVs, uploaded PDFs/images, copied source
 documents, and extraction evidence. Both need appropriate backup arrangements.
 The uploaded reference schedule can be imported through **Manage schedule**;

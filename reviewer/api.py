@@ -7,7 +7,7 @@ import re
 import threading
 import uuid
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from time import monotonic
@@ -26,6 +26,7 @@ from ocr_ingestion.models import is_labor_rate
 
 from .auth import PUBLIC_ROUTES, AuthConfig, register_auth, signed_in_email
 from .checker import CHECKER_VERSION, compare, differences_csv, parse_reference
+from .document_lifecycle import deletion_plan, finish_deletions, library, public_plan
 from .documents import page_image, receive_upload, restore_extraction
 from .matching import canonical, classification_graph, compatible
 from .review import review_progress, table_tokens
@@ -34,6 +35,7 @@ from .schemas import (
     BulkDetails,
     CheckRequest,
     ClassificationAlias,
+    DeleteDocumentRequest,
     MappingRequest,
     ReviewDetails,
     ReviewRequest,
@@ -48,6 +50,7 @@ def create_app(data_dir=None, frontend_dir=None):
     auth = AuthConfig.from_env()
     data = Path(data_dir or os.environ.get("WARREN_DATA_DIR", ROOT / "data")).resolve()
     state = State(data / "reviewer")
+    finish_deletions(state, data)
     operation_lock = threading.RLock()
     executor = ThreadPoolExecutor(
         max_workers=1, thread_name_prefix="document-extraction"
@@ -179,7 +182,9 @@ def create_app(data_dir=None, frontend_dir=None):
         )
 
     def entity(kind, identifier):
-        result = state.get(kind, identifier)
+        with operation_lock:
+            finish_deletions(state, data)
+            result = state.get(kind, identifier)
         if result is None:
             raise HTTPException(404, "This item could not be found.")
         return result
@@ -231,11 +236,13 @@ def create_app(data_dir=None, frontend_dir=None):
         )
 
     def saved_records():
-        return [
-            r
-            for r in load_records(data / "document_line_items.csv")
-            if is_labor_rate(r)
-        ]
+        with operation_lock:
+            finish_deletions(state, data)
+            return [
+                r
+                for r in load_records(data / "document_line_items.csv")
+                if is_labor_rate(r)
+            ]
 
     def session_view(session, saved_ids=None):
         if saved_ids is None:
@@ -253,14 +260,23 @@ def create_app(data_dir=None, frontend_dir=None):
         return public
 
     def extract_job(identifier):
+        def live_session():
+            current = state.get("session", identifier)
+            if current is None:
+                raise CancelledError()
+            return current
+
         try:
-            session = entity("session", identifier)
-            session["status"] = "processing"
-            state.put("session", identifier, session)
+            with operation_lock:
+                session = live_session()
+                session["status"] = "processing"
+                state.put("session", identifier, session)
 
             def progress(page, total):
-                session.update(page=page, total_pages=total)
-                state.put("session", identifier, session)
+                with operation_lock:
+                    live_session()
+                    session.update(page=page, total_pages=total)
+                    state.put("session", identifier, session)
 
             result = extract_document(
                 session["path"],
@@ -269,12 +285,18 @@ def create_app(data_dir=None, frontend_dir=None):
                 use_ocr=session["use_ocr"],
                 progress=progress,
             )
-            session.update(status="ready", extraction=result.evidence(), revision=1)
-            state.put("session", identifier, session)
+            with operation_lock:
+                live_session()
+                session.update(status="ready", extraction=result.evidence(), revision=1)
+                state.put("session", identifier, session)
+        except CancelledError:
+            return
         except Exception as exc:
-            session = entity("session", identifier)
-            session.update(status="failed", error=str(exc))
-            state.put("session", identifier, session)
+            with operation_lock:
+                session = state.get("session", identifier)
+                if session is not None:
+                    session.update(status="failed", error=str(exc))
+                    state.put("session", identifier, session)
 
     def current_session(identifier, revision):
         session = entity("session", identifier)
@@ -343,10 +365,66 @@ def create_app(data_dir=None, frontend_dir=None):
             "page": 0,
             "total_pages": 0,
             "revision": 0,
+            "document_id": hashlib.sha256(content).hexdigest(),
         }
-        state.put("session", identifier, session)
-        executor.submit(extract_job, identifier)
+        with operation_lock:
+            finish_deletions(state, data)
+            state.put("session", identifier, session)
+            executor.submit(extract_job, identifier)
         return session_view(session)
+
+    @app.get("/api/documents")
+    def saved_documents():
+        with operation_lock:
+            records = saved_records()
+            return library(records, state.list("session"))
+
+    def get_deletion_plan(document_id=None, session_id=None):
+        finish_deletions(state, data)
+        if document_id and not re.fullmatch(r"[a-f0-9]{64}", document_id):
+            raise HTTPException(404, "Document not found.")
+        plan = deletion_plan(
+            state, data, document_id=document_id, session_id=session_id
+        )
+        if plan is None:
+            raise HTTPException(404, "Document not found.")
+        return plan
+
+    @app.get("/api/documents/{document_id}/deletion-preview")
+    def document_deletion_preview(document_id: str):
+        with operation_lock:
+            return public_plan(get_deletion_plan(document_id=document_id))
+
+    @app.get("/api/sessions/{identifier}/deletion-preview")
+    def session_deletion_preview(identifier: str):
+        with operation_lock:
+            return public_plan(get_deletion_plan(session_id=identifier))
+
+    def remove_document(body, *, document_id=None, session_id=None):
+        with operation_lock:
+            plan = get_deletion_plan(document_id=document_id, session_id=session_id)
+            if body.confirmation != plan["confirmation"]:
+                raise HTTPException(
+                    409,
+                    "This document changed. Close the dialog and review deletion again.",
+                )
+            state.put("document_deletion", plan["id"], plan)
+            finish_deletions(state, data)
+            return {
+                "deleted": True,
+                **public_plan(plan),
+                "session_ids": plan["session_ids"],
+                "run_ids": plan["run_ids"],
+                "record_ids": plan["record_ids"],
+            }
+
+    @app.delete("/api/documents/{document_id}")
+    def remove_saved_document(document_id: str, body: DeleteDocumentRequest):
+        return remove_document(body, document_id=document_id)
+
+    @app.delete("/api/sessions/{identifier}")
+    def remove_review_document(identifier: str, body: DeleteDocumentRequest):
+        return remove_document(body, session_id=identifier)
 
     @app.get("/api/sessions/{identifier}")
     def get_session(identifier: str):
@@ -454,6 +532,11 @@ def create_app(data_dir=None, frontend_dir=None):
 
     @app.get("/api/documents/{document_id}/pages/{page_number}")
     def saved_page(document_id: str, page_number: int):
+        with operation_lock:
+            finish_deletions(state, data)
+            return page_image(saved_original(document_id), page_number)
+
+    def saved_original(document_id):
         if not re.fullmatch("[0-9a-f]{64}", document_id):
             raise HTTPException(404, "Source document not found.")
         folder = data / "document_line_items_private" / "originals"
@@ -464,7 +547,24 @@ def create_app(data_dir=None, frontend_dir=None):
             raise HTTPException(
                 404, "The original source is unavailable. Reupload it to view evidence."
             )
-        return page_image(paths[0], page_number)
+        return paths[0]
+
+    @app.get("/api/documents/{document_id}/source-info")
+    def source_info(document_id: str):
+        with operation_lock:
+            finish_deletions(state, data)
+            path = saved_original(document_id)
+            if path.suffix.lower() == ".pdf":
+                import pymupdf
+
+                with pymupdf.open(path) as document:
+                    count = len(document)
+            else:
+                from PIL import Image
+
+                with Image.open(path) as document:
+                    count = getattr(document, "n_frames", 1)
+            return {"page_count": count}
 
     @app.get("/api/records")
     def records():
@@ -490,15 +590,17 @@ def create_app(data_dir=None, frontend_dir=None):
 
     @app.post("/api/records/details")
     def bulk_details(body: BulkDetails):
-        known = {r["record_id"] for r in saved_records()}
-        if set(body.records) - known:
-            raise HTTPException(404, "One or more saved records could not be found.")
         # Validate the entire selection before committing any comparison details.
         values = {
             identifier: validated_details(detail)
             for identifier, detail in body.records.items()
         }
         with operation_lock:
+            known = {r["record_id"] for r in saved_records()}
+            if set(body.records) - known:
+                raise HTTPException(
+                    404, "One or more saved records could not be found."
+                )
             state.put_many(
                 "detail",
                 {

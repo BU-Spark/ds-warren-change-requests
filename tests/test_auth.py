@@ -65,9 +65,19 @@ def test_protect_data_downloads_and_admin_routes(workspace):
         "/api/checks/sample/differences.csv",
         "/api/reference/sample/source",
         "/api/admin/accounts",
+        "/api/documents",
+        "/api/documents/sample/deletion-preview",
+        "/api/documents/sample/source-info",
+        "/api/sessions/sample/deletion-preview",
     ):
         assert client.get(path).status_code == 401
     assert client.post("/api/sessions").status_code == 401
+    assert (
+        client.request(
+            "DELETE", "/api/documents/sample", json={"confirmation": "a" * 64}
+        ).status_code
+        == 401
+    )
     assert client.get("/api/health").status_code == 200
 
 
@@ -229,6 +239,15 @@ def test_simultaneous_redemption_and_password_change_are_single_use(workspace):
 def test_cross_origin_missing_origin_and_forged_cookie(workspace):
     client, _ = workspace
     assert (
+        client.request(
+            "DELETE",
+            "/api/documents/sample",
+            json={"confirmation": "a" * 64},
+            headers={"Origin": "https://evil.test"},
+        ).status_code
+        == 403
+    )
+    assert (
         client.post(
             "/api/auth/login",
             json={"email": EMAIL, "password": PASSWORD},
@@ -243,6 +262,7 @@ def test_cross_origin_missing_origin_and_forged_cookie(workspace):
     assert client.get("/api/auth/session").json() == {
         "enabled": True,
         "email": None,
+        "mode": "accounts",
         "role": None,
     }
 

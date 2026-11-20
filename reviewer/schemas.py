@@ -31,6 +31,10 @@ class CheckRequest(StrictModel):
     record_ids: list[str] = Field(min_length=1)
 
 
+class DeleteDocumentRequest(StrictModel):
+    confirmation: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class ReviewDetails(StrictModel):
     contractor: str = Field(default="", max_length=300)
     classification: str = Field(default="", max_length=300)

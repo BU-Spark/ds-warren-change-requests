@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from reviewer.api import create_app
 from reviewer.state import State
+from tests.helpers import detail_lines, write_pdf
+from tests.test_app import save, upload
 
 
 @pytest.fixture
@@ -92,3 +94,25 @@ def test_postgres_auth_api_and_atomic_redemption(postgres, monkeypatch):
         assert accounts.login(email, password) is None
         accounts.disable(email)
         assert accounts.login(email, "new-synthetic-password") is None
+
+
+def test_postgres_document_deletion_clears_metadata_and_allows_reupload(postgres):
+    with TestClient(create_app(postgres)) as client:
+        source = write_pdf(postgres / "synthetic.pdf", detail_lines())
+        session = upload(client, source)
+        assert save(client, session).json()["added"] == 2
+        document_id = session["extraction"]["document_id"]
+        assert client.get("/api/documents").json()[0]["document_id"] == document_id
+        path = f"/api/documents/{document_id}"
+        preview = client.get(path + "/deletion-preview").json()
+        assert (
+            client.request(
+                "DELETE", path, json={"confirmation": preview["confirmation"]}
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/documents").json() == []
+        assert client.get(f"/api/sessions/{session['id']}").status_code == 404
+        assert client.app.state.store.list("document_deletion") == []
+        again = upload(client, source)
+        assert save(client, again).json()["added"] == 2

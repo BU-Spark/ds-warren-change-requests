@@ -20,12 +20,19 @@ For frontend development, keep the Python server running and run `npm --prefix f
 
 ## Sign-in
 
-Accounts are invite-only and managed by this application. App admins generate
-private, single-use invitation and password-reset links; no email is sent and
-no external identity provider is used. Missing authentication settings stop
-startup. Configure `WARREN_PUBLIC_URL` and bootstrap an admin using the
-[account setup guide](AUTH_SETUP.md). A disposable synthetic local demo may
-explicitly use `WARREN_ALLOW_UNAUTHENTICATED=1` with no configured origin.
+Sign in with the shared project access code. The initial code is **1234**.
+Set `WARREN_ACCESS_CODE` on the app service to change it to 4–128 letters/numbers
+(case-sensitive), then redeploy. Code changes revoke existing code sessions.
+The code is checked only on the server; sessions expire after one hour and
+sign-out revokes them. Everyone with the code has access to the shared review
+workspace, including document deletion; there is no individual identity or
+account administration in this mode. Use a longer code for client access.
+
+`WARREN_AUTH_MODE=code` is the default. Existing invite-only accounts are
+preserved and can be used by setting `WARREN_AUTH_MODE=accounts`; see the
+[account setup guide](AUTH_SETUP.md). `WARREN_PUBLIC_URL` is still required.
+A disposable synthetic local demo may explicitly use
+`WARREN_ALLOW_UNAUTHENTICATED=1` with no configured origin.
 
 See [Railway deployment](RAILWAY.md) for hosted PostgreSQL, file storage, domain
 configuration, and the first-admin command. Railway project permissions are
@@ -34,15 +41,16 @@ separate from the app's admin role.
 ## Review workflow
 
 1. **Upload & review:** Choose **Upload document**, add a PDF, PNG, JPEG, or TIFF, enter the project and contractor, and extract labor rates. Processing opens **Documents in review**. You can switch back to Upload document while processing continues. Documents are limited to 200 MB.
-2. **Saved data:** Search and filter accepted labor records. Select records for a check. Open a record to inspect its original values and source page. Short displayed IDs extend when prefixes collide; full identifiers remain in storage and exports. Project ID (filename) is a display label derived from the filename, not a verified business identifier.
-3. **Labor checks:** Activate a reference schedule and check selected records or the full saved dataset. Review matches, differences, and unresolved checks independently. Open each result for source and tracker evidence. A row containing explicit ST, OT, and DT rates produces three comparisons.
-4. **Differences:** Review and export flagged rate differences, including rates absent from the applicable approved set. For 100 comparisons with 8 differences, this tab and export contain exactly 8 findings. Unresolved checks are counted separately.
+2. **Saved documents:** Fully saved documents move here automatically and leave the review queue. Browse by filename/project/contractor, inspect the original source pages, open the document's saved rates, or check its accepted rows. Partially saved files also appear here with a Continue review action, while remaining in review until complete.
+3. **Saved data:** Search and filter accepted labor records, including by source document. Select records for a check. Open a record to inspect its original values and source page. Short displayed IDs extend when prefixes collide; full identifiers remain in storage and exports. Project ID (filename) is a display label derived from the filename, not a verified business identifier.
+4. **Labor checks:** Activate a reference schedule and check selected records or the full saved dataset. Review matches, differences, and unresolved checks independently. Open each result for source and tracker evidence. A row containing explicit ST, OT, and DT rates produces three comparisons.
+5. **Differences:** Review and export flagged rate differences, including rates absent from the applicable approved set. For 100 comparisons with 8 differences, this tab and export contain exactly 8 findings. Unresolved checks are counted separately.
 
 **Upload document** and **Documents in review** are separate views. Opening a new upload retains the active document. Switching back retains its source page, selected rows and confirmations; switching between documents also keeps each document's page and row selection while the app is open. The last view and active document are restored after a reload, and confirmed source reviews are saved on the server. Unsaved file drafts and row-selection drafts remain in memory only.
 
 The three process steps are clickable. **Upload document** opens the form; **Review extracted rates** opens the review view; **Save & check** takes you to the selected document's save actions. Step navigation never saves rows or runs checks automatically. Use the explicit save/check buttons for those actions. The review list refreshes processing statuses while it is open, and background completion does not interrupt an upload draft.
 
-The **Documents to review** queue is in Documents in review, with pending table reviews, unreadable pages, failed extractions, and documents with no usable rates first. Use its attention filter to focus on outstanding work. Each document shows its status, including whether it needs review, is ready to save, or is saved.
+The **Documents to review** queue is in Documents in review, with pending table reviews, unreadable pages, failed extractions, and documents with no usable rates first. Use its attention filter to focus on outstanding work. Fully saved documents are listed under Saved documents rather than in this queue. Partial saves and documents with unresolved pages/mapping remain in review.
 
 Within a document, the **Review checklist** lists required reviews and column mapping first. A newly opened document starts on its first pending page; returning to a document resumes your place. Click a checklist item or **Next table to review** to open the source page and focus a specific table. Confirm source checks, select rows and save them explicitly. Confirmations survive reloads and server restarts; remapping invalidates confirmations whose values changed. Saved source rows do not trigger repeat review. Unreadable pages link to their source so you can inspect them or retry a clearer upload.
 
@@ -51,6 +59,33 @@ Existing saved records are not rewritten. If a contractor, classification, or da
 The source page omits native PDF annotations. Flattened handwriting can remain visible. Unknown or obscured printed values require human review; extraction does not guarantee perfect recognition for arbitrary documents.
 
 Document reading is automatic. PDFs with selectable text use direct extraction; scans use local OCR when needed. There is no OCR switch or configuration section in the interface, and legacy saved preferences cannot disable document reading. Tesseract is required for scanned documents. Extracted values that require source review still need explicit confirmation.
+
+## Delete a document and restart
+
+Use the trash action beside a document in the review queue or **Delete document**
+in Saved documents. A confirmation lists saved rows, upload sessions, and check
+history affected. Cancel leaves the workspace unchanged. Only the final
+**Delete permanently** action performs deletion; if the document changes before
+confirmation, review the confirmation again.
+
+Deletion removes all upload/review sessions for the exact same file identity,
+its saved CSV rows, source copies, extraction evidence, comparison details, and
+check-history runs containing it. The confirmation explicitly identifies runs
+that also include other documents; those entire historical snapshots are
+removed, while other documents and their saved rows remain available to check
+again. The approved reference schedule and classification relationships remain.
+Same-named files with different content identities are separate documents.
+
+Deletion is available to signed-in workspace reviewers and affects the shared
+workspace. Failed, queued, and processing uploads may be deleted too. A deleted
+worker cannot recreate its session or results when it finishes. Original files
+outside the app's managed storage are not removed.
+
+Upload the original file again to restart extraction and source review. Its
+deleted row IDs no longer block saving. CSV replacement is locked and
+recoverable; confirmed deletions interrupted during metadata/file cleanup are
+finished on the next data request or server restart. The server does not modify
+historical findings in place or leave deleted-document findings in analytics.
 
 ## Crossed-out and replacement rates
 

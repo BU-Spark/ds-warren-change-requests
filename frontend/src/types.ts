@@ -16,6 +16,7 @@ export type Extraction = {
   pages: Record<string, unknown>[];
 };
 export type Session = {
+  document_id?: string;
   id: string;
   filename: string;
   project: string;
@@ -32,6 +33,27 @@ export type Session = {
   reviewed?: Record<string, string>;
   review_summary?: ReviewSummary;
   saved_ids?: string[];
+};
+export type SavedDocument = {
+  document_id: string;
+  filename: string;
+  projects: string[];
+  contractors: string[];
+  record_ids: string[];
+  saved_rows: number;
+  session_id: string | null;
+  uploaded_at: string | null;
+  status: "saved" | "partially_saved";
+  unsaved_rows: number;
+};
+export type DeletionPreview = {
+  filename: string;
+  document_id: string | null;
+  saved_rows: number;
+  uploads: number;
+  check_runs: number;
+  shared_runs: number;
+  confirmation: string;
 };
 export type ReferenceRow = Record<
   | "source_csv_row_number"

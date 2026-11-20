@@ -37,6 +37,29 @@ def _recover(csv_path: Path, manifest_path: Path, journal_path: Path):
         return
     journal = json.loads(journal_path.read_text())
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
+    if journal.get("operation") == "delete_document":
+        backup = manifest_path.parent / "rewrite_backup.csv"
+        if manifest.get("last_transaction") != journal["transaction"]:
+            if journal["original_exists"]:
+                if not backup.exists():
+                    raise ValueError("Document deletion recovery needs its CSV recovery file.")
+                fd, restored = tempfile.mkstemp(prefix=".restore-delete-", dir=csv_path.parent)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(backup.read_bytes())
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.replace(restored, csv_path)
+                finally:
+                    if os.path.exists(restored):
+                        os.unlink(restored)
+            else:
+                csv_path.unlink(missing_ok=True)
+        else:
+            _purge_document_artifacts(manifest_path.parent, journal["document_id"])
+        journal_path.unlink()
+        backup.unlink(missing_ok=True)
+        return
     if manifest.get("last_transaction") != journal["transaction"]:
         if csv_path.exists():
             with csv_path.open("r+b") as stream:
@@ -44,6 +67,63 @@ def _recover(csv_path: Path, manifest_path: Path, journal_path: Path):
                 stream.flush()
                 os.fsync(stream.fileno())
     journal_path.unlink()
+
+
+def _purge_document_artifacts(private: Path, document_id: str):
+    (private / "evidence" / f"{document_id}.json").unlink(missing_ok=True)
+    for original in (private / "originals").glob(document_id + ".*"):
+        original.unlink()
+
+
+def delete_document(csv_path: str | Path, document_id: str) -> int:
+    """Remove one source identity atomically; a recovery journal protects other rows."""
+    import re
+
+    if not re.fullmatch(r"[a-f0-9]{64}", document_id):
+        raise ValueError("Invalid source document identity.")
+    csv_path = Path(csv_path)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    private, manifest_path, journal_path = _paths(csv_path)
+    with FileLock(str(csv_path) + ".lock", timeout=30):
+        _recover(csv_path, manifest_path, journal_path)
+        existing = _read_records(csv_path)
+        kept = [row for row in existing if row["document_id"] != document_id]
+        manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {
+            "schema_version": SCHEMA_VERSION, "documents": {},
+        }
+        if manifest.get("schema_version") != SCHEMA_VERSION:
+            raise ValueError("Manifest schema is incompatible; no document was deleted.")
+        if len(kept) == len(existing) and document_id not in manifest["documents"]:
+            _purge_document_artifacts(private, document_id)
+            return 0
+        private.mkdir(parents=True, exist_ok=True)
+        backup = private / "rewrite_backup.csv"
+        existed = csv_path.exists()
+        with backup.open("wb") as stream:
+            if existed:
+                stream.write(csv_path.read_bytes())
+            stream.flush()
+            os.fsync(stream.fileno())
+        transaction = hashlib.sha256(os.urandom(32)).hexdigest()
+        _atomic_json(journal_path, {"operation": "delete_document", "original_exists": existed,
+                                   "document_id": document_id, "transaction": transaction})
+        fd, temporary = tempfile.mkstemp(prefix=".delete-document-", dir=csv_path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=FIELDS, lineterminator="\n")
+                writer.writeheader()
+                writer.writerows(kept)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, csv_path)
+            manifest["documents"].pop(document_id, None)
+            manifest["last_transaction"] = transaction
+            _atomic_json(manifest_path, manifest)
+            _recover(csv_path, manifest_path, journal_path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return len(existing) - len(kept)
 
 
 def load_records(csv_path: str | Path) -> list[dict]:

@@ -1,4 +1,25 @@
-# Invite-only reviewer accounts
+# Workspace sign-in
+
+The default login uses a shared access code, initially **1234**. No email,
+invitation, or password setup is needed. Set the app variable
+`WARREN_ACCESS_CODE` to a new case-sensitive code of 4–128 letters/numbers and
+redeploy to change it. This also revokes existing code sessions. Treat `1234`
+as temporary; use a longer code before sharing client access.
+
+Code sessions last one hour, use HttpOnly cookies (Secure on HTTPS), store only
+session-token hashes in the database, and are revoked on sign-out. Login
+attempts are limited. The code is never sent to the browser except when entered
+by the user. Every code holder shares reviewer permissions, including document
+deletion; individual account identity and Manage accounts are unavailable.
+
+`WARREN_AUTH_MODE=code` is the default. Keep `WARREN_PUBLIC_URL`, database and
+volume settings as described in [Railway deployment](RAILWAY.md).
+
+## Optional invite-only accounts
+
+The following workflow is available with `WARREN_AUTH_MODE=accounts`.
+Existing accounts remain stored when changing modes. To enable these flows,
+set this variable for both the server and operator commands.
 
 The reviewer manages its own accounts. No Supabase, email sender, public sign-up,
 or automatic email verification is used. Email addresses are login identifiers;
@@ -15,6 +36,7 @@ set. Schema tables are created automatically without inserting any default user.
 
 ```bash
 export WARREN_PUBLIC_URL='http://127.0.0.1:8000'
+export WARREN_AUTH_MODE=accounts
 python -m reviewer.manage_accounts invite admin@example.com --admin
 python -m reviewer
 ```

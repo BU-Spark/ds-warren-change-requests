@@ -123,7 +123,7 @@ test("upload, review, save, resolve and export exactly eight differences", async
   }
   await page.setViewportSize({ width: 1280, height: 1000 });
   await page.getByRole("button", { name: "Upload & review" }).click();
-  await page.getByRole("button", { name: "Upload another" }).click();
+  await page.getByRole("tab", { name: "Upload document", exact: true }).click();
   await page.screenshot({
     path: "test-results/upload-desktop.png",
     fullPage: true,
@@ -377,7 +377,7 @@ test("review queue prioritizes documents, jumps to required tables and remembers
     "needs-review.pdf",
   );
   await page.getByLabel(/Show only documents needing attention/).check();
-  await expect(docs.getByRole("button")).toHaveCount(1);
+  await expect(docs.locator(".review-document-open")).toHaveCount(1);
   await docs.getByRole("button").first().click();
   await expect(page.getByLabel("Source page")).toHaveValue("3");
   await page.setViewportSize({ width: 390, height: 900 });

@@ -1,6 +1,10 @@
 import DocumentWorkflowNav, { type DocumentView } from "./DocumentWorkflowNav";
 import ReferenceDialog from "./ReferenceDialog";
 import FindingDialog from "./FindingDialog";
+import SavedDocuments from "./SavedDocuments";
+import DeleteDocumentDialog from "./DeleteDocumentDialog";
+import DocumentSourceDialog from "./DocumentSourceDialog";
+import "./documents.css";
 import ResultsOverview from "./ResultsOverview";
 import ResultsReport from "./ResultsReport";
 import { documents, metrics } from "./results";
@@ -38,12 +42,21 @@ import {
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
+  Trash2,
   UploadCloud,
   X,
   AlertCircle,
 } from "lucide-react";
 import { api, json } from "./api";
-import type { Row, Session, Reference, Run, Finding } from "./types";
+import type {
+  Row,
+  Session,
+  Reference,
+  Run,
+  Finding,
+  SavedDocument,
+  DeletionPreview,
+} from "./types";
 
 import {
   formatDate,
@@ -55,21 +68,25 @@ import {
 } from "./presentation";
 import { Pill, Empty, Source, RowsTable, Mapping } from "./components";
 
-type Tab = "upload" | "data" | "checks" | "differences";
+type Tab = "upload" | "documents" | "data" | "checks" | "differences";
 const tabs: { id: Tab; name: string; icon: typeof FileText }[] = [
   { id: "upload", name: "Upload & review", icon: UploadCloud },
+  { id: "documents", name: "Saved documents", icon: FolderOpen },
   { id: "data", name: "Saved data", icon: FolderOpen },
   { id: "checks", name: "Labor checks", icon: ClipboardCheck },
   { id: "differences", name: "Differences", icon: SlidersHorizontal },
 ];
 const titles = {
   upload: "Upload & review",
+  documents: "Saved documents",
   data: "Saved data",
   checks: "Labor checks",
   differences: "Differences",
 };
 const subtitles = {
   upload: "Upload a change request and review its extracted labor rates.",
+  documents:
+    "Browse saved documents, inspect their source, or start a fresh review.",
   data: "Search saved labor records or select records to check.",
   checks:
     "Compare document rates against approved rates for the contractor and work dates.",
@@ -147,6 +164,18 @@ export default function App({
     [technical, setTechnical] = useState(false),
     [resultFilter, setResultFilter] = useState("needs_review");
   const [resultDocument, setResultDocument] = useState("");
+  const [savedDocuments, setSavedDocuments] = useState<SavedDocument[]>([]);
+  const [focusedDocument, setFocusedDocument] = useState("");
+  const [savedDataDocument, setSavedDataDocument] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<{
+    route: string;
+    preview: DeletionPreview;
+  } | null>(null);
+  const [sourceDocument, setSourceDocument] = useState<{
+    document_id: string;
+    filename: string;
+    page_count: number;
+  } | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [referenceOpen, setReferenceOpen] = useState(false),
     [referencePreview, setReferencePreview] = useState<Reference | null>(null),
@@ -183,6 +212,9 @@ export default function App({
     useState<ClassificationGraph | null>(null);
   const uploadRef = useRef<HTMLInputElement>(null);
   const currentRun = runs.find((r) => r.id === runId) || runs[0];
+  const reviewSessions = sessions.filter(
+    (s) => s.review_summary?.status !== "saved",
+  );
   const currentTab = tabs.some((t) => t.id === tab) ? tab : "upload";
   const setCurrentRun = (id: string) => {
     setRunId(id);
@@ -191,13 +223,15 @@ export default function App({
     localStorage.setItem("warren-run", id);
   };
   const load = async () => {
-    const [data, history, refs, checks] = await Promise.all([
+    const [data, history, refs, checks, documents] = await Promise.all([
       api<{ records: Row[]; details: Record<string, Row> }>("/records"),
       api<Session[]>("/sessions"),
       api<{ active: Reference | null }>("/reference"),
       api<Run[]>("/checks"),
+      api<SavedDocument[]>("/documents"),
     ]);
     setRows(data.records);
+    setSavedDocuments(documents);
     setDetails(data.details);
     setSessions(history);
     setReference(refs.active);
@@ -232,6 +266,16 @@ export default function App({
     }
   };
   const adoptSession = (next: Session, openReview = false) => {
+    if (!openReview && next.review_summary?.status === "saved") {
+      setSession(null);
+      localStorage.removeItem("warren-session");
+      if (currentTab === "upload" && documentView === "review") {
+        setFocusedDocument(next.extraction!.document_id);
+        setTab("documents");
+        setDocumentView("upload");
+      }
+      return;
+    }
     if (session?.extraction)
       reviewDrafts.current.set(session.id, {
         revision: session.revision,
@@ -403,6 +447,14 @@ export default function App({
       setNotice(
         `${summary.added} rows saved. ${summary.already_present} already present. Your dataset now contains ${summary.total} rows.`,
       );
+      if (next.review_summary?.status === "saved") {
+        setFocusedDocument(next.extraction!.document_id);
+        setTab("documents");
+        setDocumentView("upload");
+        setSession(null);
+        localStorage.removeItem("warren-session");
+        reviewDrafts.current.delete(next.id);
+      }
     });
   const runCheck = (ids: string[]) =>
     act(async () => {
@@ -452,7 +504,57 @@ export default function App({
   const matchesFilters = (r: Row | Finding) =>
     (!contractorFilter || r.contractor === contractorFilter) &&
     (!projectFilter || r.project === projectFilter);
-  const filteredRows = searchRows(rows, search).filter(matchesFilters);
+  const openDelete = (route: string) =>
+    act(async () => {
+      const preview = await api<DeletionPreview>(`${route}/deletion-preview`);
+      setDeleteTarget({ route, preview });
+    });
+  const removeDocument = () =>
+    act(async () => {
+      if (!deleteTarget) return;
+      const removed = await api<{
+        session_ids: string[];
+        record_ids: string[];
+        run_ids: string[];
+      }>(
+        deleteTarget.route,
+        json("DELETE", { confirmation: deleteTarget.preview.confirmation }),
+      );
+      for (const id of removed.session_ids) reviewDrafts.current.delete(id);
+      if (session && removed.session_ids.includes(session.id)) {
+        setSession(null);
+        setPreviewSelection(new Set());
+        setReviewed({});
+        setTargetTable("");
+        localStorage.removeItem("warren-session");
+        setDocumentView("upload");
+      }
+      setSelected(
+        (previous) =>
+          new Set(
+            [...previous].filter((id) => !removed.record_ids.includes(id)),
+          ),
+      );
+      if (currentRun && removed.run_ids.includes(currentRun.id)) {
+        setRunId("");
+        localStorage.removeItem("warren-run");
+        setReportOpen(false);
+      }
+      if (savedDataDocument === deleteTarget.preview.document_id)
+        setSavedDataDocument("");
+      if (resultDocument === deleteTarget.preview.document_id)
+        setResultDocument("");
+      setFinding(null);
+      setPreviewRow(null);
+      await load();
+      setDeleteTarget(null);
+      setNotice(
+        `${deleteTarget.preview.filename} deleted. Upload it again to start a fresh review.`,
+      );
+    });
+  const filteredRows = searchRows(rows, search)
+    .filter(matchesFilters)
+    .filter((r) => !savedDataDocument || r.document_id === savedDataDocument);
   const scopedResults = (currentRun?.results || [])
     .filter(matchesFilters)
     .filter((r) => !resultDocument || r.document_id === resultDocument);
@@ -691,7 +793,7 @@ export default function App({
                 <>
                   <DocumentWorkflowNav
                     view={documentView}
-                    count={sessions.length}
+                    count={reviewSessions.length}
                     busy={busy}
                     onChange={setDocumentView}
                   />
@@ -700,7 +802,7 @@ export default function App({
                     role="tabpanel"
                     aria-labelledby={`document-tab-${documentView}`}
                   >
-                    {documentView === "review" && sessions.length > 0 && (
+                    {documentView === "review" && reviewSessions.length > 0 && (
                       <section className="card recent">
                         <div className="card-heading">
                           <div>
@@ -711,7 +813,7 @@ export default function App({
                             </p>
                           </div>
                           <span className="muted">
-                            {sessions.length} documents
+                            {reviewSessions.length} documents
                           </span>
                         </div>
                         <label className="review-filter">
@@ -722,14 +824,14 @@ export default function App({
                           />
                           Show only documents needing attention (
                           {
-                            sessions.filter((s) =>
+                            reviewSessions.filter((s) =>
                               needsAttention(s.review_summary?.status),
                             ).length
                           }
                           )
                         </label>
                         {attentionOnly &&
-                          !sessions.some((s) =>
+                          !reviewSessions.some((s) =>
                             needsAttention(s.review_summary?.status),
                           ) && (
                             <p className="review-clear">
@@ -737,7 +839,7 @@ export default function App({
                             </p>
                           )}
                         <div className="recent-list">
-                          {[...sessions]
+                          {[...reviewSessions]
                             .sort(
                               (a, b) =>
                                 Number(
@@ -753,42 +855,55 @@ export default function App({
                                 needsAttention(s.review_summary?.status),
                             )
                             .map((s) => (
-                              <button
-                                key={s.id}
-                                disabled={busy}
-                                onClick={() =>
-                                  act(async () =>
-                                    adoptSession(
-                                      await api<Session>(`/sessions/${s.id}`),
-                                      true,
-                                    ),
-                                  )
-                                }
-                              >
-                                <span className="document-icon">
-                                  <FileText size={20} />
-                                </span>
-                                <span className="recent-name">
-                                  <strong>{s.filename}</strong>
-                                  <small>
-                                    {s.contractor} · {formatDate(s.created_at)}
-                                  </small>
-                                </span>
-                                <Pill
-                                  tone={
-                                    needsAttention(s.review_summary?.status)
-                                      ? "warn"
-                                      : s.review_summary?.status === "saved"
-                                        ? "good"
-                                        : s.status === "failed"
-                                          ? "bad"
-                                          : "neutral"
+                              <div className="review-document-row" key={s.id}>
+                                <button
+                                  className="review-document-open"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    act(async () =>
+                                      adoptSession(
+                                        await api<Session>(`/sessions/${s.id}`),
+                                        true,
+                                      ),
+                                    )
                                   }
                                 >
-                                  {reviewLabel(s.review_summary)}
-                                </Pill>
-                                <ChevronRight size={17} />
-                              </button>
+                                  <span className="document-icon">
+                                    <FileText size={20} />
+                                  </span>
+                                  <span className="recent-name">
+                                    <strong>{s.filename}</strong>
+                                    <small>
+                                      {s.contractor} ·{" "}
+                                      {formatDate(s.created_at)}
+                                    </small>
+                                  </span>
+                                  <Pill
+                                    tone={
+                                      needsAttention(s.review_summary?.status)
+                                        ? "warn"
+                                        : s.review_summary?.status === "saved"
+                                          ? "good"
+                                          : s.status === "failed"
+                                            ? "bad"
+                                            : "neutral"
+                                    }
+                                  >
+                                    {reviewLabel(s.review_summary)}
+                                  </Pill>
+                                  <ChevronRight size={17} />
+                                </button>
+                                <button
+                                  className="icon-button delete-document"
+                                  aria-label={`Delete ${s.filename}`}
+                                  disabled={busy}
+                                  onClick={() =>
+                                    openDelete(`/sessions/${s.id}`)
+                                  }
+                                >
+                                  <Trash2 size={17} />
+                                </button>
+                              </div>
                             ))}
                         </div>
                       </section>
@@ -1336,6 +1451,36 @@ export default function App({
                   </section>
                 </>
               )}
+              {currentTab === "documents" && (
+                <SavedDocuments
+                  documents={savedDocuments}
+                  busy={busy}
+                  canCheck={Boolean(reference)}
+                  focused={focusedDocument}
+                  onUpload={openUpload}
+                  onDelete={(id) => openDelete(`/documents/${id}`)}
+                  onRates={(id) => {
+                    setSavedDataDocument(id);
+                    setSelected(new Set());
+                    setTab("data");
+                  }}
+                  onSource={(doc) =>
+                    act(async () => {
+                      const info = await api<{ page_count: number }>(
+                        `/documents/${doc.document_id}/source-info`,
+                      );
+                      setSourceDocument({ ...doc, ...info });
+                    })
+                  }
+                  onReview={(id) =>
+                    act(async () => {
+                      adoptSession(await api<Session>(`/sessions/${id}`), true);
+                      setTab("upload");
+                    })
+                  }
+                  onCheck={runCheck}
+                />
+              )}
               {currentTab === "data" && (
                 <section className="card">
                   <div className="card-heading">
@@ -1356,6 +1501,24 @@ export default function App({
                   </div>
                   {rows.length ? (
                     <>
+                      <label className="saved-document-filter">
+                        Document
+                        <select
+                          aria-label="Filter saved document"
+                          value={savedDataDocument}
+                          onChange={(e) => {
+                            setSavedDataDocument(e.target.value);
+                            setSelected(new Set());
+                          }}
+                        >
+                          <option value="">All saved documents</option>
+                          {savedDocuments.map((d) => (
+                            <option key={d.document_id} value={d.document_id}>
+                              {d.filename} · {short(d.document_id)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       {filterBar(rows)}
                       <div className="table-actions">
                         <span>
@@ -1772,6 +1935,24 @@ export default function App({
             projectFilter || "All projects",
           ]}
           onClose={() => setReportOpen(false)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteDocumentDialog
+          preview={deleteTarget.preview}
+          busy={busy}
+          error={error}
+          onClose={() => {
+            setDeleteTarget(null);
+            setError("");
+          }}
+          onDelete={removeDocument}
+        />
+      )}
+      {sourceDocument && (
+        <DocumentSourceDialog
+          source={sourceDocument}
+          onClose={() => setSourceDocument(null)}
         />
       )}
       {classificationMap && (

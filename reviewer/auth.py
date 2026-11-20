@@ -1,8 +1,8 @@
-"""Invite-only accounts with operator-issued links; no external identity provider."""
+"""Shared code or invite-only sign-in with server-side session enforcement."""
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from .accounts import Accounts
+from .code_access import CodeAccess
 
 PUBLIC_ROUTES = {
     "/api/health",
@@ -34,6 +35,8 @@ def normalize_email(email):
 @dataclass(frozen=True)
 class AuthConfig:
     origin: str
+    mode: str = "code"
+    access_code: str = field(default="1234", repr=False)
 
     @property
     def secure(self):
@@ -101,18 +104,28 @@ class AuthConfig:
                 raise RuntimeError(
                     "Attach an app volume and set WARREN_DATA_DIR to its mount path."
                 )
-        return cls(origin)
+        mode = os.getenv("WARREN_AUTH_MODE", "code")
+        if mode not in {"code", "accounts"}:
+            raise RuntimeError("WARREN_AUTH_MODE must be code or accounts.")
+        code = os.getenv("WARREN_ACCESS_CODE", "1234")
+        if mode == "code" and not re.fullmatch(r"[a-zA-Z0-9]{4,128}", code):
+            raise RuntimeError("WARREN_ACCESS_CODE must contain 4–128 letters/numbers.")
+        return cls(origin, mode, code)
 
 
 def signed_in_email(config, request):
-    return request.app.state.accounts.session_email(
-        request.cookies.get(config.session_cookie)
+    access = (
+        request.app.state.code_access
+        if config.mode == "code"
+        else request.app.state.accounts
     )
+    return access.session_email(request.cookies.get(config.session_cookie))
 
 
 class Credentials(BaseModel):
-    email: str = Field(max_length=254)
-    password: str = Field(min_length=1, max_length=128)
+    email: str = Field(default="", max_length=254)
+    password: str = Field(default="", max_length=128)
+    code: str = Field(default="", max_length=128)
 
 
 class NewPassword(BaseModel):
@@ -141,14 +154,24 @@ def invitation_link(config, token, kind):
 def register_auth(app: FastAPI, config: AuthConfig | None):
     accounts = Accounts(app.state.store.database) if config else None
     app.state.accounts = accounts
+    code_access = (
+        CodeAccess(app.state.store.database, config.access_code)
+        if config and config.mode == "code"
+        else None
+    )
+    app.state.code_access = code_access
     reset_cookie = (
         "__Secure-warren-recovery" if config and config.secure else "warren-recovery"
     )
     reset_path = "/api/auth/reset"
 
-    def configured():
+    def configured(*, accounts_only=False):
         if config is None:
             raise HTTPException(404, "Account sign-in is unavailable.")
+        if accounts_only and config.mode != "accounts":
+            raise HTTPException(
+                404, "Account sign-in is unavailable in access-code mode."
+            )
         return config
 
     def set_token(response, cfg, name, path, token, seconds):
@@ -183,12 +206,21 @@ def register_auth(app: FastAPI, config: AuthConfig | None):
         return {
             "enabled": config is not None,
             "email": email,
-            "role": accounts.role(email) if email else None,
+            "mode": config.mode if config else "code",
+            "role": ("reviewer" if code_access else accounts.role(email))
+            if email
+            else None,
         }
 
     @app.post("/api/auth/login")
     def login(body: Credentials, response: Response):
         cfg = configured()
+        if code_access:
+            token = code_access.login(body.code)
+            if not token:
+                raise HTTPException(401, "Incorrect access code. Try again.")
+            set_token(response, cfg, cfg.session_cookie, "/", token, 3600)
+            return {"email": "Shared workspace", "role": "reviewer", "mode": "code"}
         email = body.email.strip().casefold()
         token = accounts.login(email, body.password)
         if not token:
@@ -201,7 +233,7 @@ def register_auth(app: FastAPI, config: AuthConfig | None):
 
     @app.post("/api/auth/confirm")
     def confirm(body: Confirmation, response: Response):
-        cfg = configured()
+        cfg = configured(accounts_only=True)
         token = accounts.confirm(body.token, body.kind)
         if not token:
             raise HTTPException(
@@ -213,7 +245,7 @@ def register_auth(app: FastAPI, config: AuthConfig | None):
 
     @app.post(reset_path)
     def reset(body: NewPassword, request: Request, response: Response):
-        cfg = configured()
+        cfg = configured(accounts_only=True)
         token = request.cookies.get(reset_cookie)
         if (
             not token
@@ -230,13 +262,13 @@ def register_auth(app: FastAPI, config: AuthConfig | None):
     @app.post("/api/auth/logout")
     def logout(request: Request, response: Response):
         cfg = configured()
-        accounts.logout(request.cookies.get(cfg.session_cookie))
+        (code_access or accounts).logout(request.cookies.get(cfg.session_cookie))
         clear(response, cfg, cfg.session_cookie)
         clear(response, cfg, reset_cookie, reset_path)
         return {"ok": True}
 
     def require_admin(request):
-        configured()
+        configured(accounts_only=True)
         email = signed_in_email(config, request)
         if not email or accounts.role(email) != "admin":
             raise HTTPException(403, "App-admin access is required.")
