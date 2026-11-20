@@ -240,7 +240,23 @@ def compare(
                 elif not valid:
                     reason = "Matching schedules contain incomplete or invalid reference information."
                 elif not applicable:
-                    reason = "No single approved schedule covers the full work period. Check the dates or split work across schedule periods."
+                    reason = (
+                        f"No single approved schedule covers the full work period "
+                        f"({start} to {end}). Check the dates or split work across "
+                        "schedule periods using the work-date controls for selected pages or rows."
+                    )
+                    periods = sorted({
+                        (r["position"], r["effective_time_period_start"],
+                         r["effective_time_period_finish"])
+                        for r in overlaps
+                    })
+                    if periods:
+                        reason += " Approved schedules overlapping the entered dates: " + "; ".join(
+                            f"{position}: {first} to {last}"
+                            for position, first, last in periods
+                        ) + "."
+                    else:
+                        reason += " No approved candidate schedule overlaps the entered dates."
                 elif not approved:
                     reason = "The applicable schedule is not marked Approved."
                 elif any(len(values) > 1 for values in conflicts.values()):

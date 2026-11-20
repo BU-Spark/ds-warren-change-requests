@@ -251,3 +251,25 @@ def test_only_regular_rate_matters_when_premium_rates_are_missing_or_wrong():
         ]
         == "match"
     )
+
+
+def test_period_warning_explains_schedule_boundaries_without_accepting_wrong_dates():
+    rows = [
+        schedule(effective_time_period_finish="2026-05-31"),
+        schedule(source_csv_row_number="3", effective_time_period_start="2026-06-01",
+                 reg_rate="12.00"),
+    ]
+    result = run(record(work_start="2026-05-20", work_end="2026-06-10"), rows)[0]
+    assert result["outcome"] == "needs_review"
+    assert "2026-05-20 to 2026-06-10" in result["reason"]
+    assert "2026-01-01 to 2026-05-31" in result["reason"]
+    assert "2026-06-01 to 2026-12-31" in result["reason"]
+    assert "selected pages or rows" in result["reason"]
+    assert run(record(work_start="2026-05-20", work_end="2026-05-20"), rows)[0]["outcome"] == "match"
+    assert run(record(work_start="2026-06-10", work_end="2026-06-10"), rows)[0]["outcome"] == "difference"
+
+
+def test_period_warning_reports_no_overlap_without_inventing_work_dates():
+    result = run(record(work_start="2025-01-01", work_end="2025-01-02"))[0]
+    assert result["outcome"] == "needs_review"
+    assert "No approved candidate schedule overlaps" in result["reason"]
