@@ -320,3 +320,190 @@ def test_generic_business_words_do_not_identify_a_contractor():
     assert resolve_contractor("Inc", ref["rows"]) == ""
     assert resolve_contractor("Masonry", ref["rows"]) == ""
     assert resolve_contractor("Example", ref["rows"]) == "Example Masonry, Inc."
+
+
+def blended_foreman_reference(**updates):
+    return reference(
+        [
+            schedule(
+                position="Laborer Foreperson (Blended)",
+                effective_time_period_start="2026-01-01",
+                effective_time_period_finish="2026-05-31",
+                reg_rate="12.34",
+                **updates,
+            ),
+            schedule(
+                source_csv_row_number="3",
+                position="Laborer Foreperson",
+                effective_time_period_start="2026-06-01",
+                effective_time_period_finish="2026-11-30",
+                reg_rate="15.67",
+            ),
+        ]
+    )
+
+
+def test_future_exact_title_does_not_hide_applicable_blended_role():
+    source = record(position_original="Laborer Foreman", reg_rate="12.34")
+    result = compare([source], blended_foreman_reference(), {}, "blended")[0]
+    assert result["outcome"] == "match"
+    assert result["matched_classifications"] == ["Laborer Foreperson (Blended)"]
+    assert result["reference_rows"] == ["2"]
+    assert result["match_method"] == "classification_variants"
+    assert source["position_original"] == "Laborer Foreman"
+
+
+@pytest.mark.parametrize(
+    "submitted,outcome", [("15.67", "match"), ("12.34", "difference")]
+)
+def test_expired_blended_rate_cannot_override_current_plain_schedule(
+    submitted, outcome
+):
+    source = record(
+        position_original="Laborer Foreman",
+        reg_rate=submitted,
+        work_start="2026-06-01",
+        work_end="2026-06-30",
+    )
+    result = compare([source], blended_foreman_reference(), {}, "plain")[0]
+    assert result["outcome"] == outcome
+    assert result["approved_rate"] == "15.67" and result["reference_rows"] == ["3"]
+
+
+def test_explicit_blended_label_is_not_broadened_to_plain_role():
+    source = record(
+        position_original="Laborer Foreman (Blended)",
+        reg_rate="15.67",
+        work_start="2026-06-01",
+        work_end="2026-06-30",
+    )
+    result = compare([source], blended_foreman_reference(), {}, "explicit")[0]
+    assert result["outcome"] == "needs_review"
+    assert "covers" in result["reason"]
+
+
+@pytest.mark.parametrize("status", ["Pending Approval", "Withdrawn"])
+def test_blended_variant_still_requires_approval(status):
+    result = compare(
+        [record(position_original="Laborer Foreman", reg_rate="12.34")],
+        blended_foreman_reference(status=status),
+        {},
+        "approval",
+    )[0]
+    assert result["outcome"] == "needs_review" and "Approved" in result["reason"]
+
+
+@pytest.mark.parametrize(
+    "qualifier,wrong",
+    [("2nd Shift", "3rd Shift"), ("Group 1", "Group 2"), ("50%", "80%")],
+)
+def test_blended_variant_keeps_other_stated_qualifiers(qualifier, wrong):
+    role = "Laborer Apprentice" if "%" in qualifier else "Laborer Foreperson"
+    ref = reference(
+        [
+            schedule(
+                position=f"{role} {qualifier}", effective_time_period_start="2026-06-01"
+            ),
+            schedule(
+                source_csv_row_number="3",
+                position=f"{role} {wrong} (Blended)",
+                reg_rate="12.34",
+            ),
+            schedule(
+                source_csv_row_number="4",
+                position=f"{role} {qualifier} (Blended)",
+                reg_rate="15.67",
+            ),
+        ]
+    )
+    source = record(position_original=f"{role} {qualifier}", reg_rate="12.34")
+    result = compare([source], ref, {}, "qualified")[0]
+    assert result["outcome"] == "difference"
+    assert result["approved_rate"] == "15.67"
+    assert result["matched_classifications"] == [f"{role} {qualifier} (Blended)"]
+
+
+def test_blended_variants_cannot_cross_contractors_or_seniority():
+    ref = reference(
+        [
+            schedule(
+                position="Laborer Foreperson", effective_time_period_start="2026-06-01"
+            ),
+            schedule(
+                source_csv_row_number="3",
+                position="Laborer Journey Person (Blended)",
+                reg_rate="12.34",
+            ),
+            schedule(
+                source_csv_row_number="4",
+                subcontractor="Another Contractor",
+                position="Laborer Foreperson (Blended)",
+                reg_rate="12.34",
+            ),
+        ]
+    )
+    result = compare(
+        [record(position_original="Laborer Foreman", reg_rate="12.34")],
+        ref,
+        {},
+        "scope",
+    )[0]
+    assert result["outcome"] == "needs_review"
+    assert {r["source_csv_row_number"] for r in result["candidates"]} == {"2"}
+
+
+def test_explicit_relationship_still_controls_target_instead_of_blended_variant():
+    row = record(position_original="Laborer Foreman", reg_rate="12.34")
+    aliases = [
+        {
+            "contractor": "Example Contractor",
+            "source_label": "Laborer Foreman",
+            "target_position": "Laborer Foreperson",
+        }
+    ]
+    result = compare([row], blended_foreman_reference(), {}, "alias", aliases)[0]
+    assert result["match_method"] == "classification_alias"
+    assert result["outcome"] == "needs_review"
+
+
+def test_conflicting_blended_approved_schedules_remain_unresolved():
+    ref = blended_foreman_reference()
+    ref["rows"].append(
+        {**ref["rows"][0], "source_csv_row_number": "4", "reg_rate": "13.45"}
+    )
+    result = compare(
+        [record(position_original="Laborer Foreman", reg_rate="12.34")],
+        ref,
+        {},
+        "conflict",
+    )[0]
+    assert result["outcome"] == "needs_review" and "conflicting" in result["reason"]
+
+
+def test_blended_fix_does_not_narrow_existing_trade_family_candidates():
+    ref = reference(
+        [
+            schedule(
+                position="Carpenter Foreperson (Example Supervisor)",
+                effective_time_period_finish="2026-05-31",
+                reg_rate="12.34",
+            ),
+            schedule(
+                source_csv_row_number="3",
+                position="Carpenter Foreperson (Blended)",
+                effective_time_period_start="2026-06-01",
+                reg_rate="15.67",
+            ),
+        ]
+    )
+    result = compare(
+        [record(position_original="Carpenter Foreman", reg_rate="12.34")],
+        ref,
+        {},
+        "historical-family",
+    )[0]
+    assert result["outcome"] == "match"
+    assert result["matched_classifications"] == [
+        "Carpenter Foreperson (Example Supervisor)"
+    ]
+    assert result["match_method"] == "trade_family"

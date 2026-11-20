@@ -242,6 +242,19 @@ def classification_candidates(contractor, classification, rows, aliases=()):
         if targets:
             return targets, "classification_alias", family(alias["target_position"])[1]
     exact = [r for r in scoped if text and canonical(r["position"]) == text]
+    if exact and "blended" not in text.split():
+        # A generic printed role can use its explicitly Blended schedule.
+        # Keep every other word/qualifier intact, and let approval/work dates
+        # determine applicability instead of a later plain title hiding it.
+        blended = [
+            r
+            for r in scoped
+            if "blended" in canonical(r["position"]).split()
+            and canonical(re.sub(r"\bblended\b", "", canonical(r["position"]))) == text
+            and compatible(classification, r["position"])
+        ]
+        if blended:
+            return exact + blended, "classification_variants", family(classification)[1]
     if exact:
         return exact, "exact_classification", family(classification)[1]
     code, title = family(classification)
