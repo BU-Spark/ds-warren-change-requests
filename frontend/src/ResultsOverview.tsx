@@ -130,10 +130,13 @@ export default function ResultsOverview(props: Props) {
         ))}
       </div>
       <p className="metrics-note">
-        Match percentage = matching rates ÷ total rates checked. Each regular,
-        overtime, or double-time rate is one comparison; unresolved checks stay
-        in the total. Document, contractor, and project filters apply to metrics
-        and reports. Search filters the findings list only.
+        Match percentage = matching rates ÷ total rates checked.{" "}
+        {props.results.some((r) => r.rate_type !== "REG")
+          ? "This saved run includes multiple rate types. New checks compare regular/ST only."
+          : "Only regular/ST rates are counted; overtime and double-time are excluded."}{" "}
+        Unresolved checks stay in the total. Document, contractor, and project
+        filters apply to metrics and reports. Search filters the findings list
+        only.
       </p>
       <div className="document-breakdown">
         <div className="document-breakdown-heading">

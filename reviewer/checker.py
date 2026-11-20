@@ -159,11 +159,6 @@ def compare(
         )
         regular = record.get("reg_rate", "") or record.get("rate", "")
         rates = [("REG", regular)] if regular != "" else []
-        rates.extend(
-            (kind, record.get(field, ""))
-            for field, kind in RATE_TYPES.items()
-            if field != "reg_rate" and record.get(field, "") != ""
-        )
         for rate_index, (kind, submitted) in enumerate(rates):
             rate_field = next(
                 field for field, label in RATE_TYPES.items() if label == kind

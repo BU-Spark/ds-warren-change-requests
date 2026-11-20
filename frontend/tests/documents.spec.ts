@@ -92,7 +92,7 @@ test("saved documents leave review, can be inspected, deleted and saved again", 
   await card
     .getByRole("button", { name: "Check saved document", exact: true })
     .click();
-  await expect(page.getByRole("status")).toContainText("6 matched");
+  await expect(page.getByRole("status")).toContainText("2 matched");
   await upload(page, "lifecycle-b.pdf");
   await page
     .getByRole("button", { name: "Save selected rows", exact: true })

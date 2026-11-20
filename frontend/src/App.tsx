@@ -483,7 +483,7 @@ export default function App({
             : "match",
       );
       setNotice(
-        `Check complete: ${run.counts.match} matched, ${run.counts.difference} differences, ${run.counts.needs_review} need review.`,
+        `Check complete: ${run.counts.match} matched, ${run.counts.difference} differences, ${run.counts.needs_review} need review.${run.skipped_non_regular ? ` ${run.skipped_non_regular} rows without regular/ST rates were skipped.` : ""}`,
       );
     });
   const openEdit = (ids: string[]) => {

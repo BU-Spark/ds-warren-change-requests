@@ -117,6 +117,7 @@ export type Finding = Record<
   review_details: Row;
 };
 export type Run = {
+  skipped_non_regular?: number;
   id: string;
   created_at: string;
   reference_version: string;

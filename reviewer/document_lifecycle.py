@@ -86,7 +86,8 @@ def deletion_plan(state, data, *, document_id=None, session_id=None):
     runs = [
         run
         for run in state.list("run")
-        if any(
+        if record_ids.intersection(run.get("record_ids", []))
+        or any(
             (document_id and f.get("document_id") == document_id)
             or f.get("record_id") in record_ids
             for f in run["results"]

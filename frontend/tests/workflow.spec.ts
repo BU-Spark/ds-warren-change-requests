@@ -153,7 +153,7 @@ test("unresolved checks, reference activation, and outdated results remain expli
   await expect(page.getByRole("status")).toContainText("2 rows saved");
   await page.getByRole("button", { name: "Check saved document" }).click();
   await expect(page.getByRole("status")).toContainText(
-    "0 matched, 0 differences, 6 need review",
+    "0 matched, 0 differences, 2 need review",
   );
   await page
     .getByRole("button", { name: "Differences", exact: false })
@@ -163,7 +163,7 @@ test("unresolved checks, reference activation, and outdated results remain expli
     page.getByRole("heading", { name: "No confirmed rate differences" }),
   ).toBeVisible();
   await expect(
-    page.getByText("6 checks still need review.", { exact: false }),
+    page.getByText("2 checks still need review.", { exact: false }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Labor checks", exact: true }).click();
   await page
@@ -181,7 +181,7 @@ test("unresolved checks, reference activation, and outdated results remain expli
   ).toBeVisible();
   await page.getByRole("button", { name: "Rerun check" }).click();
   await expect(page.getByRole("status")).toContainText(
-    "3 matched, 0 differences, 3 need review",
+    "1 matched, 0 differences, 1 need review",
   );
   await page.getByRole("button", { name: "Manage schedule" }).click();
   const referenceDialog = page.getByRole("dialog");

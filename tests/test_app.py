@@ -67,7 +67,7 @@ def test_document_review_save_compare_and_source_evidence(client, tmp_path):
     check = client.post(
         "/api/checks", json={"record_ids": [r["record_id"] for r in saved]}
     ).json()
-    assert check["counts"] == {"match": 6, "difference": 0, "needs_review": 0}
+    assert check["counts"] == {"match": 2, "difference": 0, "needs_review": 0}
     assert (
         client.get(f"/api/sessions/{session['id']}/pages/1").headers["content-type"]
         == "image/png"
@@ -483,3 +483,31 @@ def test_old_rate_type_choices_are_ignored_and_prior_rules_are_outdated(
     historical = client.get("/api/checks").json()[0]
     assert historical["stale"] and historical["rules_changed"]
     assert historical["results"] == result["results"]
+
+
+def test_legacy_mixed_run_is_not_rewritten_or_marked_outdated(client, tmp_path):
+    from copy import deepcopy
+
+    session = upload(client, write_pdf(tmp_path / "history.pdf", detail_lines()))
+    save(client, session)
+    ids = [r["record_id"] for r in session["extraction"]["records"]]
+    current = client.post("/api/checks", json={"record_ids": ids}).json()
+    old = deepcopy(current)
+    old["id"] = "legacy-mixed"
+    old["results"].append(
+        {
+            **deepcopy(old["results"][0]),
+            "rate_type": "OT",
+            "reference_rate_field": "ot_rate",
+            "finding_id": "legacy-ot",
+        }
+    )
+    old["counts"]["match"] += 1
+    old.pop("skipped_non_regular", None)
+    client.app.state.store.put("run", old["id"], old)
+    stored = deepcopy(client.app.state.store.get("run", old["id"]))
+    history = client.get("/api/checks").json()
+    legacy = next(r for r in history if r["id"] == old["id"])
+    assert legacy["stale"] is False and legacy["rules_changed"] is False
+    assert legacy["results"] == old["results"] and legacy["counts"] == old["counts"]
+    assert client.app.state.store.get("run", old["id"]) == stored

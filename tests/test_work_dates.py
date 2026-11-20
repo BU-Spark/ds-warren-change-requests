@@ -88,7 +88,7 @@ def test_skipping_dates_keeps_missing_work_needs_review(workspace):
     save(client, session)
     ids = [r["record_id"] for r in session["extraction"]["records"]]
     check = client.post("/api/checks", json={"record_ids": ids}).json()
-    assert check["counts"]["needs_review"] == 6
+    assert check["counts"]["needs_review"] == 2
     assert all(
         f["reason"] == "Confirm the dates when the work occurred."
         for f in check["results"]
@@ -164,7 +164,7 @@ def test_replace_all_saved_document_dates_marks_checks_outdated(workspace):
     assert client.get("/api/checks").json()[0]["stale"]
     assert old["results"] == client.get("/api/checks").json()[0]["results"]
     new = client.post("/api/checks", json={"record_ids": ids}).json()
-    assert new["counts"] == {"match": 12, "difference": 0, "needs_review": 0}
+    assert new["counts"] == {"match": 4, "difference": 0, "needs_review": 0}
     assert all(f["work_start"] == "2026-04-01" for f in new["results"])
     assert (
         client.post(path, json={"scope": "document", "clear": True}).json()["updated"]

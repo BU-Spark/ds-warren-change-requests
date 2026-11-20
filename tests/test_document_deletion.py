@@ -293,3 +293,22 @@ def test_committed_csv_deletion_finishes_artifact_cleanup_after_interruption(
     private = storage._paths(csv)[0]
     assert not (private / "originals" / f"{extractions[0].document_id}.pdf").exists()
     assert (private / "originals" / f"{extractions[1].document_id}.pdf").exists()
+
+
+def test_deletion_removes_a_run_that_selected_the_source_even_if_its_rows_were_skipped(
+    client, tmp_path
+):
+    first = upload(client, make_document(tmp_path))
+    second = upload(client, make_document(tmp_path, "second.pdf", "AD0002"))
+    save(client, first)
+    save(client, second)
+    ids = [r["record_id"] for r in second["extraction"]["records"]]
+    run = client.post("/api/checks", json={"record_ids": ids}).json()
+    run["record_ids"].append(first["extraction"]["records"][0]["record_id"])
+    client.app.state.store.put("run", run["id"], run)
+    path = f"/api/sessions/{first['id']}"
+    preview = client.get(path + "/deletion-preview").json()
+    assert preview["check_runs"] == preview["shared_runs"] == 1
+    assert delete(client, path).status_code == 200
+    assert client.get("/api/checks").json() == []
+    assert client.get(f"/api/sessions/{second['id']}").status_code == 200

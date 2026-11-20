@@ -54,11 +54,11 @@ def run(row=None, schedules=None, details=None):
     return compare([row or record()], reference, details or {}, "test-run")
 
 
-def test_exact_decimal_comparison_and_all_rate_types():
+def test_exact_decimal_regular_comparison_ignores_other_rate_types():
     findings = run(record(reg_rate="10.000", ot_rate="16.25", dt_rate="19.00"))
-    assert [f["outcome"] for f in findings] == ["match", "difference", "difference"]
-    assert [f["difference_per_hour"] for f in findings] == ["0.000", "1.25", "-1.00"]
-    assert [f["rate_type"] for f in findings] == ["REG", "OT", "DT"]
+    assert [f["outcome"] for f in findings] == ["match"]
+    assert [f["difference_per_hour"] for f in findings] == ["0.000"]
+    assert [f["rate_type"] for f in findings] == ["REG"]
     assert all(f["reference_row"] == "2" for f in findings)
 
 
@@ -174,8 +174,7 @@ def test_invalid_reference_period_and_missing_rate_are_unresolved():
     assert len(ref["issues"]) == 1
     assert compare([record()], ref, {}, "test")[0]["outcome"] == "needs_review"
     assert (
-        run(record(ot_rate="15"), schedules=[schedule(ot_rate="")])[1]["outcome"]
-        == "needs_review"
+        run(record(), schedules=[schedule(reg_rate="")])[0]["outcome"] == "needs_review"
     )
 
 
@@ -230,3 +229,25 @@ def test_rate_difference_preserves_precision_beyond_default_decimal_context():
     ]
     assert finding["outcome"] == "difference"
     assert finding["difference_per_hour"] == "0.000000000000000000000000000000001"
+
+
+@pytest.mark.parametrize("field", ["ot_rate", "dt_rate"])
+def test_premium_only_rows_do_not_create_findings_or_missing_date_errors(field):
+    row = record(reg_rate="", work_start="", work_end="", **{field: "999.00"})
+    original = dict(row)
+    assert run(row) == []
+    assert row == original
+
+
+def test_only_regular_rate_matters_when_premium_rates_are_missing_or_wrong():
+    row = record(reg_rate="10.00", ot_rate="999.00", dt_rate="999.00")
+    findings = run(row, schedules=[schedule(ot_rate="", dt_rate="")])
+    assert len(findings) == 1 and findings[0]["outcome"] == "match"
+    assert findings[0]["reference_rate_field"] == "reg_rate"
+    assert row["ot_rate"] == row["dt_rate"] == "999.00"
+    assert (
+        run(record(reg_rate="0.00"), schedules=[schedule(reg_rate="0.00")])[0][
+            "outcome"
+        ]
+        == "match"
+    )

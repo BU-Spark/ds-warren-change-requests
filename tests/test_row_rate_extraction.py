@@ -241,7 +241,7 @@ def test_scan_preserves_row_specific_rate_types(tmp_path):
     ]
 
 
-def test_pay_types_reach_correct_checker_fields_after_date_and_contractor_review(
+def test_only_regular_rows_reach_checker_after_date_and_contractor_review(
     tmp_path,
 ):
     source = write_pdf(tmp_path / "check.pdf", summary_lines())
@@ -275,13 +275,10 @@ def test_pay_types_reach_correct_checker_fields_after_date_and_contractor_review
         for r in result.records
     }
     findings = compare(result.records, reference, details, "reviewed")
-    assert len(findings) == 15 and all(f["outcome"] == "match" for f in findings)
-    assert [f["rate_type"] for f in findings] == [
-        kind for _ in ROLES for kind in ("REG", "OT", "DT")
-    ]
-    assert [f["reference_rate_field"] for f in findings] == [
-        field for _ in ROLES for field in ("reg_rate", "ot_rate", "dt_rate")
-    ]
+    assert len(findings) == 5 and all(f["outcome"] == "match" for f in findings)
+    assert {f["rate_type"] for f in findings} == {"REG"}
+    assert {f["reference_rate_field"] for f in findings} == {"reg_rate"}
+    assert len(result.records) == 15  # All printed source rows remain available.
 
 
 def test_reviewer_upload_date_defaults_and_bulk_details_work_with_row_rates(tmp_path):
@@ -323,7 +320,8 @@ def test_reviewer_upload_date_defaults_and_bulk_details_work_with_row_rates(tmp_
             == 200
         )
         checked = client.post("/api/checks", json={"record_ids": ids}).json()
-        assert checked["counts"] == {"match": 3, "difference": 0, "needs_review": 0}
+        assert checked["counts"] == {"match": 1, "difference": 0, "needs_review": 0}
+        assert checked["skipped_non_regular"] == 2
 
 
 def test_typed_table_rows_cannot_be_reinterpreted_by_the_standalone_parser(tmp_path):
@@ -352,3 +350,21 @@ def test_typed_table_rows_cannot_be_reinterpreted_by_the_standalone_parser(tmp_p
     assert result.records[0]["ot_rate"] == "20.00"
     assert result.records[0]["rate"] == result.records[0]["reg_rate"] == ""
     assert any(issue["code"] == "unresolved_rate_basis" for issue in result.issues)
+
+
+def test_premium_only_selection_is_explained_without_creating_an_empty_run(tmp_path):
+    (tmp_path / "labor_rates_fa.csv").write_bytes(reference_bytes())
+    with TestClient(create_app(tmp_path)) as client:
+        session = upload(
+            client, write_pdf(tmp_path / "premiums.pdf", summary_lines()[:6])
+        )
+        save(client, session)
+        ids = [
+            r["record_id"]
+            for r in session["extraction"]["records"]
+            if not r["reg_rate"]
+        ]
+        reply = client.post("/api/checks", json={"record_ids": ids})
+        assert reply.status_code == 400
+        assert "No regular/ST rates" in reply.json()["detail"]
+        assert client.get("/api/checks").json() == []

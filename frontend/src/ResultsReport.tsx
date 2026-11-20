@@ -156,8 +156,10 @@ function Content({
       </div>
       <p className="report-method">
         Match percentage is matching rates divided by total rates checked for
-        each document, within the selected contractor/project scope. Each
-        regular, overtime, and double-time rate is counted separately.
+        each document, within the selected contractor/project scope.{" "}
+        {results.some((r) => r.rate_type !== "REG")
+          ? "This saved run counts each regular, overtime and double-time rate separately."
+          : "Only regular/ST rates are counted; overtime and double-time are excluded."}{" "}
         Unresolved checks remain in the denominator and are not confirmed
         differences. Only saved comparisons in this run are counted; unsaved
         rows and extraction failures are outside this report.

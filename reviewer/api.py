@@ -817,6 +817,10 @@ def create_app(data_dir=None, frontend_dir=None):
             results = compare(
                 records, reference, current_details, identifier, current_aliases
             )
+            if not results:
+                raise ValueError(
+                    "No regular/ST rates were found in the selected rows. Overtime and double-time rates are excluded from checks."
+                )
             run = {
                 "id": identifier,
                 "created_at": now(),
@@ -826,6 +830,7 @@ def create_app(data_dir=None, frontend_dir=None):
                 "reference_name": reference["name"],
                 "details_fingerprint": fingerprint(current_details),
                 "record_ids": list(requested),
+                "skipped_non_regular": len(records) - len(results),
                 "results": results,
                 "counts": {
                     outcome: sum(r["outcome"] == outcome for r in results)
