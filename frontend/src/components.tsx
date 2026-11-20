@@ -105,6 +105,7 @@ export function RowsTable({
   onOpen,
   technical = false,
   knownIds = [],
+  openLabel = "Review",
 }: {
   rows: Row[];
   selected?: Set<string>;
@@ -112,6 +113,7 @@ export function RowsTable({
   onOpen?: (row: Row) => void;
   technical?: boolean;
   knownIds?: string[];
+  openLabel?: string;
 }) {
   const base = [
     "record_id",
@@ -123,6 +125,7 @@ export function RowsTable({
     "description",
     "work_start",
     "work_end",
+    "work_date_source",
     "reg_hours",
     "ot_hours",
     "dt_hours",
@@ -249,7 +252,7 @@ export function RowsTable({
               {onOpen && (
                 <td>
                   <button className="text-button" onClick={() => onOpen(r)}>
-                    Review <ArrowUpRight size={14} />
+                    {openLabel} <ArrowUpRight size={14} />
                   </button>
                 </td>
               )}

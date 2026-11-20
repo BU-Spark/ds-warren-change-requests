@@ -4,6 +4,11 @@ import FindingDialog from "./FindingDialog";
 import SavedDocuments from "./SavedDocuments";
 import DeleteDocumentDialog from "./DeleteDocumentDialog";
 import DocumentSourceDialog from "./DocumentSourceDialog";
+import WorkDatesDialog, {
+  WorkPeriodFields,
+  type WorkDatesTarget,
+  type WorkDatesUpdate,
+} from "./WorkDatesDialog";
 import "./documents.css";
 import ResultsOverview from "./ResultsOverview";
 import ResultsReport from "./ResultsReport";
@@ -60,6 +65,7 @@ import type {
 
 import {
   formatDate,
+  withWorkDates,
   money,
   display,
   short,
@@ -154,6 +160,9 @@ export default function App({
   const [file, setFile] = useState<File | null>(null),
     [project, setProject] = useState(""),
     [contractor, setContractor] = useState("");
+  const [workStart, setWorkStart] = useState("");
+  const [workEnd, setWorkEnd] = useState("");
+  const [dateTarget, setDateTarget] = useState<WorkDatesTarget | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set()),
     [previewSelection, setPreviewSelection] = useState<Set<string>>(new Set()),
     [reviewed, setReviewed] = useState<Record<string, string>>({});
@@ -395,12 +404,16 @@ export default function App({
       form.append("file", file);
       form.append("project", project);
       form.append("contractor", contractor);
+      form.append("work_start", workStart);
+      form.append("work_end", workEnd);
       const next = await api<Session>("/sessions", {
         method: "POST",
         body: form,
       });
       adoptSession(next, true);
       setFile(null);
+      setWorkStart("");
+      setWorkEnd("");
       await load();
     });
   const confirmTable = (tableId: string, checked: boolean) =>
@@ -479,6 +492,39 @@ export default function App({
     setFinding(null);
     setPreviewRow(null);
   };
+  const openWorkDates = (
+    scope: WorkDatesTarget["scope"],
+    ids = [...previewSelection],
+  ) => {
+    if (!session?.extraction) return;
+    setError("");
+    setDateTarget({
+      route: `/sessions/${session.id}`,
+      filename: session.filename,
+      records: session.extraction.records,
+      details: session.comparison_details || {},
+      selected: ids,
+      page,
+      scope,
+      revision: session.revision,
+    });
+  };
+  const applyWorkDates = (body: WorkDatesUpdate) =>
+    act(async () => {
+      if (!dateTarget) return;
+      const result = await api<{ updated: number; targeted: number }>(
+        `${dateTarget.route}/work-dates`,
+        json("POST", body),
+      );
+      if (session && dateTarget.route === `/sessions/${session.id}`) {
+        setSession(await api<Session>(`/sessions/${session.id}`));
+      }
+      await load();
+      setDateTarget(null);
+      setNotice(
+        `${body.clear ? "Entered dates removed from" : "Work dates applied to"} ${result.updated} of ${result.targeted} rows. Run the check again to update results.`,
+      );
+    });
   const saveDetails = () =>
     act(async () => {
       const records = Object.fromEntries(
@@ -552,7 +598,10 @@ export default function App({
         `${deleteTarget.preview.filename} deleted. Upload it again to start a fresh review.`,
       );
     });
-  const filteredRows = searchRows(rows, search)
+  const filteredRows = searchRows(
+    rows.map((r) => withWorkDates(r, details[r.record_id])),
+    search,
+  )
     .filter(matchesFilters)
     .filter((r) => !savedDataDocument || r.document_id === savedDataDocument);
   const scopedResults = (currentRun?.results || [])
@@ -569,9 +618,11 @@ export default function App({
   const activeTable =
     session?.extraction?.tables.filter((t) => t.page === page) || [];
   const previewRows =
-    session?.extraction?.records.filter(
-      (r) => Number(r.source_page) === page,
-    ) || [];
+    session?.extraction?.records
+      .filter((r) => Number(r.source_page) === page)
+      .map((r) =>
+        withWorkDates(r, session.comparison_details?.[r.record_id]),
+      ) || [];
   const selectedForSave =
     session?.extraction?.records.filter((r) =>
       previewSelection.has(r.record_id),
@@ -1084,6 +1135,59 @@ export default function App({
                               </div>
                               <Pill>{previewRows.length} rows</Pill>
                             </div>
+                            <div
+                              className="work-date-panel"
+                              role="region"
+                              aria-label="Document work dates"
+                            >
+                              <strong>Work dates</strong>
+                              <p>
+                                Set a range once for the document, this page, or
+                                selected rows. Missing dates can be resolved
+                                later.
+                              </p>
+                              <div className="saved-document-actions">
+                                <button
+                                  className="secondary"
+                                  disabled={
+                                    busy || !session.extraction.records.length
+                                  }
+                                  onClick={() => openWorkDates("document")}
+                                >
+                                  Set document dates
+                                </button>
+                                <button
+                                  className="secondary"
+                                  disabled={busy || !previewRows.length}
+                                  onClick={() => openWorkDates("page")}
+                                >
+                                  Set dates for this page
+                                </button>
+                                <button
+                                  className="secondary"
+                                  disabled={busy || !previewSelection.size}
+                                  onClick={() => openWorkDates("rows")}
+                                >
+                                  Set dates for selected rows (
+                                  {previewSelection.size})
+                                </button>
+                              </div>
+                              <small>
+                                {
+                                  session.extraction.records.filter(
+                                    (r) =>
+                                      !(
+                                        session.comparison_details?.[
+                                          r.record_id
+                                        ]?.work_start || r.work_start
+                                      ),
+                                  ).length
+                                }{" "}
+                                of {session.extraction.records.length} rows
+                                still need work dates. Dates shown below include
+                                entered comparison dates.
+                              </small>
+                            </div>
                             {activeTable.map((table) => (
                               <div
                                 key={table.table_id}
@@ -1182,6 +1286,10 @@ export default function App({
                                 onSelect={setPreviewSelection}
                                 technical={technical}
                                 knownIds={rows.map((r) => r.record_id)}
+                                onOpen={(r) =>
+                                  openWorkDates("rows", [r.record_id])
+                                }
+                                openLabel="Set dates"
                               />
                             ) : (
                               <Empty title="No ready rows on this page">
@@ -1378,6 +1486,28 @@ export default function App({
                                 </small>
                               </label>
                             </div>
+                            <fieldset className="upload-work-dates">
+                              <legend>
+                                Work dates{" "}
+                                <span className="muted">(optional)</span>
+                              </legend>
+                              <p>
+                                Know the work period for this document? Enter it
+                                once to fill rows missing printed dates. Leave
+                                both blank to set dates by page or row later.
+                              </p>
+                              <WorkPeriodFields
+                                start={workStart}
+                                end={workEnd}
+                                onStart={setWorkStart}
+                                onEnd={setWorkEnd}
+                              />
+                              <small>
+                                Existing printed work dates are kept. Use the
+                                actual work period, rather than the invoice or
+                                approval date.
+                              </small>
+                            </fieldset>
                             <div className="form-footer">
                               <span>
                                 <ShieldCheck size={15} />
@@ -1459,6 +1589,29 @@ export default function App({
                   focused={focusedDocument}
                   onUpload={openUpload}
                   onDelete={(id) => openDelete(`/documents/${id}`)}
+                  onDates={(doc) =>
+                    act(async () => {
+                      const review =
+                        doc.status === "partially_saved" && doc.session_id
+                          ? await api<Session>(`/sessions/${doc.session_id}`)
+                          : null;
+                      const documentRows =
+                        review?.extraction?.records ||
+                        rows.filter((r) => r.document_id === doc.document_id);
+                      setDateTarget({
+                        route: review?.extraction
+                          ? `/sessions/${review.id}`
+                          : `/documents/${doc.document_id}`,
+                        filename: doc.filename,
+                        records: documentRows,
+                        details: review?.comparison_details || details,
+                        selected: [],
+                        page: Number(documentRows[0]?.source_page || 1),
+                        scope: "document",
+                        revision: review?.revision,
+                      });
+                    })
+                  }
                   onRates={(id) => {
                     setSavedDataDocument(id);
                     setSelected(new Set());
@@ -1537,7 +1690,13 @@ export default function App({
                         rows={filteredRows}
                         selected={selected}
                         onSelect={setSelected}
-                        onOpen={setPreviewRow}
+                        onOpen={(r) =>
+                          setPreviewRow(
+                            rows.find(
+                              (original) => original.record_id === r.record_id,
+                            ) || r,
+                          )
+                        }
                         technical={technical}
                         knownIds={rows.map((r) => r.record_id)}
                       />
@@ -1550,8 +1709,10 @@ export default function App({
                         Show technical columns and full IDs
                       </label>
                       <p className="table-note">
-                        Blank values are unknown. Short record IDs are display
-                        labels; full IDs are preserved in evidence and exports.
+                        Dates include reviewer entries used for comparisons;
+                        open a record to inspect original printed values. Blank
+                        values are unknown. Short record IDs are display labels;
+                        full IDs are preserved in evidence and exports.
                       </p>
                     </>
                   ) : (
@@ -1947,6 +2108,18 @@ export default function App({
             setError("");
           }}
           onDelete={removeDocument}
+        />
+      )}
+      {dateTarget && (
+        <WorkDatesDialog
+          target={dateTarget}
+          busy={busy}
+          error={error}
+          onClose={() => {
+            setDateTarget(null);
+            setError("");
+          }}
+          onApply={applyWorkDates}
         />
       )}
       {sourceDocument && (

@@ -44,6 +44,28 @@ Printed **Trade / Hrs / Rate / Cost** tables are also recognized, including scan
 
 Two-line printed **Labor / STRAIGHT / OVERTIME / DOUBLE** proposal headings are recognized with separate hours and rates. Roles with explicit printed rates are retained even when their hours or amounts are blank or zero. These tables require review; proposal dates are not assumed to be work dates, and a customer name is not assumed to be the submitting contractor. Mixed-contractor packages need explicit per-record comparison details.
 
+Printed **Date/Personnel / Manhours / Rate / Extended** tables and similar
+personnel/classification/description tables can express the pay type in each
+row label instead of separate rate columns. Explicit suffixes such as
+`(Reg Time)`, `(Overtime)`, `(Double Time)`, `ST`, `RT`, `OT`, and `DT` assign
+that source row to the corresponding regular, overtime, or double-time fields.
+The full label remains in `description`, the printed role substring in
+`position_original`, and the explicit pay label in `rate_basis_raw`. Rates,
+hours, and extensions stay associated with their own source row; equal-looking
+rows are not merged. Generic rate fields remain blank for these typed rows so
+OT/DT cannot also be compared as regular rates.
+
+This detection uses column alignment and explicit source labels, independently
+of the contractor name or reference schedule. Zero-hour roles and rates without
+hours/amounts remain eligible. Labor sums, escalation, markup and supporting
+costs are excluded. Unknown/conflicting pay labels and unreadable rates are
+flagged rather than assigned a guessed rate type or reconstructed price.
+These tables always require source review, including native PDFs; their
+contractor remains unresolved for explicit confirmation in mixed-company
+packets. The Date/Personnel heading and a proposal date do not establish a
+work date. The reviewer's optional document/page/row date controls can supply
+comparison dates separately from these printed source values.
+
 Printed **FWD / Ticket / Date / Area / Job Name / Description / Worker / Craft / Hours / Rate / Cost** ledgers preserve worker names, classifications, tickets, printed work dates, and original numeric values. Worker-detail rates are retained even when hours and amounts are zero; craft-only summaries remain excluded. Missing hours, amounts, or work dates do not erase a usable worker rate; unresolved dates remain blank with source evidence for review. Upload-level contractor metadata is left blank on these ledger records, so confirm the employer through comparison details.
 
 Additional native-text patterns include complete **Field Labor** proposal rows, **dated T&M Slip** rows, and explicit statements such as `Labor: 8 hours @ $20.00 $160.00`. They require printed hours, rate, and amount; no missing rate is calculated. Slip suffixes ST/RT map to regular, OT to overtime, and DT to double-time. PT remains generic. Only the slip's printed work date is used, scoped to its own section and page; quote dates do not become work dates. New layouts always require review and leave the contractor unresolved. Zero-hour lines with an explicit labor rate are retained; material statements are excluded and explicit zero rates remain zero.
@@ -74,7 +96,7 @@ BrandSafway roles with printed ST rates are retained even without submitted hour
 | `description`, `position_original`, `worker_name`, `rate_basis_raw` | Source wording without classification substitutions. For an ACME description explicitly stating `N [role] at ...`, the role substring is quoted verbatim alongside the full description; no tracker classification or seniority is inferred. |
 | `work_start`, `work_end` | Explicit printed work dates; grouped labor dates carry forward only within their table. Unlabeled dates stay in `unlabeled_date_raw`. |
 | `hours`, `rate` | Generic HRS/RATE values. A premium description does not imply a specific OT/DT classification. |
-| `reg_hours`, `ot_hours`, `dt_hours`, `reg_rate`, `ot_rate`, `dt_rate` | Explicit ST/OT/DT columns. ST is named `reg` consistently with the tracker. These are submitted rates, not declarations of approval. |
+| `reg_hours`, `ot_hours`, `dt_hours`, `reg_rate`, `ot_rate`, `dt_rate` | Explicit ST/OT/DT columns or explicit row-label pay types. ST is named `reg` consistently with the tracker. These are submitted rates, not declarations of approval. |
 | `reg_amount`, `ot_amount`, `dt_amount` | Separate printed ST/OT/DT extensions where present. A missing total is not filled by a calculated sum. |
 | `quantity`, `unit`, `unit_rate` | Legacy schema fields retained for compatibility; supporting-cost tables are no longer ingested. |
 | `extension_amount`, `overhead_profit_amount`, `total_amount` | Separate printed amounts; markup is not part of the labor hourly rate. |

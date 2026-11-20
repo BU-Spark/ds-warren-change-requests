@@ -42,6 +42,17 @@ class ReviewDetails(StrictModel):
     work_end: str = ""
 
 
+class WorkDatesRequest(StrictModel):
+    scope: str = Field(pattern="^(document|page|rows)$")
+    work_start: str = ""
+    work_end: str = ""
+    page: int | None = Field(default=None, ge=1)
+    record_ids: list[str] = Field(default_factory=list, max_length=10000)
+    revision: int | None = None
+    only_missing: bool = True
+    clear: bool = False
+
+
 class ClassificationAlias(StrictModel):
     contractor: str = Field(min_length=1, max_length=300)
     source_label: str = Field(min_length=1, max_length=300)

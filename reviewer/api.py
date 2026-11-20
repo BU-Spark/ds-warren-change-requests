@@ -40,8 +40,10 @@ from .schemas import (
     ReviewDetails,
     ReviewRequest,
     SaveRequest,
+    WorkDatesRequest,
 )
 from .state import State, fingerprint, now
+from .work_dates import apply_period, validate_period
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -250,6 +252,10 @@ def create_app(data_dir=None, frontend_dir=None):
         public = {k: v for k, v in session.items() if k != "path"}
         public["review_summary"] = review_progress(session, saved_ids)
         if session.get("extraction"):
+            ids = {r["record_id"] for r in session["extraction"]["records"]}
+            public["comparison_details"] = {
+                key: value for key, value in details().items() if key in ids
+            }
             public["review_tokens"] = table_tokens(session["extraction"])
             public["reviewed"] = {
                 key: token
@@ -289,6 +295,9 @@ def create_app(data_dir=None, frontend_dir=None):
                 live_session()
                 session.update(status="ready", extraction=result.evidence(), revision=1)
                 state.put("session", identifier, session)
+                period = session.get("work_period", {})
+                if period.get("work_start"):
+                    apply_period(state, result.records, **period)
         except CancelledError:
             return
         except Exception as exc:
@@ -336,7 +345,10 @@ def create_app(data_dir=None, frontend_dir=None):
         file: UploadFile = File(...),
         project: str = Form(...),
         contractor: str = Form(...),
+        work_start: str = Form(""),
+        work_end: str = Form(""),
     ):
+        validate_period(work_start, work_end)
         project, contractor = project.strip(), contractor.strip()
         if not project or not contractor:
             raise ValueError("Enter a project and contractor before extracting tables.")
@@ -366,6 +378,7 @@ def create_app(data_dir=None, frontend_dir=None):
             "total_pages": 0,
             "revision": 0,
             "document_id": hashlib.sha256(content).hexdigest(),
+            "work_period": {"work_start": work_start, "work_end": work_end},
         }
         with operation_lock:
             finish_deletions(state, data)
@@ -430,6 +443,59 @@ def create_app(data_dir=None, frontend_dir=None):
     def get_session(identifier: str):
         return session_view(entity("session", identifier))
 
+    def set_work_dates(body, records):
+        if not body.clear:
+            validate_period(body.work_start, body.work_end)
+            if not body.work_start:
+                raise ValueError(
+                    "Enter the work start and finish, or cancel to skip dates."
+                )
+        if body.scope == "page":
+            if body.page is None:
+                raise ValueError("Choose a source page.")
+            records = [r for r in records if int(r["source_page"]) == body.page]
+        elif body.scope == "rows":
+            requested = set(body.record_ids)
+            if not requested or requested - {r["record_id"] for r in records}:
+                raise ValueError("Select rows belonging to this document.")
+            records = [r for r in records if r["record_id"] in requested]
+        if not records:
+            raise ValueError("There are no extracted labor rows in this scope.")
+        count = apply_period(
+            state,
+            records,
+            body.work_start,
+            body.work_end,
+            only_missing=body.only_missing,
+            clear=body.clear,
+        )
+        return {"updated": count, "targeted": len(records)}
+
+    @app.post("/api/sessions/{identifier}/work-dates")
+    def session_work_dates(identifier: str, body: WorkDatesRequest):
+        with operation_lock:
+            session = current_session(identifier, body.revision)
+            result = set_work_dates(body, session["extraction"]["records"])
+            if body.scope == "document":
+                session["work_period"] = (
+                    {}
+                    if body.clear
+                    else {
+                        "work_start": body.work_start,
+                        "work_end": body.work_end,
+                    }
+                )
+                state.put("session", identifier, session)
+            return result
+
+    @app.post("/api/documents/{document_id}/work-dates")
+    def document_work_dates(document_id: str, body: WorkDatesRequest):
+        with operation_lock:
+            records = [r for r in saved_records() if r["document_id"] == document_id]
+            if not records:
+                raise HTTPException(404, "Saved document not found.")
+            return set_work_dates(body, records)
+
     @app.put("/api/sessions/{identifier}/tables/{table_id}")
     def mapping(identifier: str, table_id: str, body: MappingRequest):
         with operation_lock:
@@ -461,6 +527,7 @@ def create_app(data_dir=None, frontend_dir=None):
             }
             if set(body.columns.values()) - allowed:
                 raise ValueError("Select supported printed labor columns only.")
+            previous_ids = {r["record_id"] for r in result.records}
             map_table(result, table_id, body.columns, row_type="labor")
             for row in result.records:
                 row["contractor"], row["project"] = (
@@ -470,6 +537,13 @@ def create_app(data_dir=None, frontend_dir=None):
             session.update(
                 extraction=result.evidence(), revision=session["revision"] + 1
             )
+            period = session.get("work_period", {})
+            if period.get("work_start"):
+                apply_period(
+                    state,
+                    [r for r in result.records if r["record_id"] not in previous_ids],
+                    **period,
+                )
             state.put("session", identifier, session)
             return session_view(session)
 

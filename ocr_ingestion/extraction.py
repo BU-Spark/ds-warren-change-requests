@@ -151,9 +151,72 @@ def _labor_words(words):
     return selected
 
 
+def _row_rate_label(label):
+    """Recognize an explicit terminal pay-type label, never infer it from a price."""
+    basis = r"(?:Reg(?:ular)?(?:[ -]+Time)?|Straight[ -]*Time|Over[ -]*Time|Double[ -]*Time|[SROD]\.?(?:T)\.?)"
+    match = re.fullmatch(r"(.+?)\s*\(\s*(" + basis + r")\s*\)", label, re.I)
+    if not match:
+        match = re.fullmatch(r"(.+?)\s+(?:[-–:]\s*)?(" + basis + r")", label, re.I)
+    if not match:
+        return None
+    role, printed_basis = match.groups()
+    if (not any(c.isalpha() for c in role)
+            or re.search(r"\(\s*" + basis + r"\s*\)", role, re.I)
+            or re.search(r"\b(?:ST|RT|OT|DT)\s*[/&+]", role, re.I)):
+        return None
+    key = _key(printed_basis)
+    prefix = ("ot" if key in {"ot", "overtime"} else "dt"
+              if key in {"dt", "doubletime"} else "reg")
+    return role.strip(), printed_basis, prefix
+
+
+def _row_rate_header(lines, index):
+    """Single Rate column with the explicit REG/OT/DT basis in each row label."""
+    line = lines[index]
+    keys = [_key(w.text) for w in line]
+    rate = next((i for i, key in enumerate(keys) if key == "rate"), None)
+    hours = next((i for i, key in enumerate(keys) if key in {"manhours", "hours", "hrs"}), None)
+    if hours is None or rate is None or not 0 < hours < rate < len(line) - 1:
+        return None
+    label_end = hours - 1 if keys[hours - 1] == "man" else hours
+    label = "".join(keys[:label_end])
+    if label not in {"datepersonnel", "personnel", "classification", "laborclassification",
+                     "description", "position", "trade", "craft"}:
+        return None
+    if keys[hours + 1:rate] not in ([], ["hourly"]):
+        return None
+    if "".join(keys[rate + 1:]) not in {"extended", "extension", "amount", "cost", "total", "extendedamount", "extendedcost"}:
+        return None
+    for earlier in reversed(lines[:index]):
+        section = _section_heading(earlier)
+        if section:
+            if section != "LABOR":
+                return None
+            break
+    # A left-aligned personnel heading is not the center of its wide column.
+    # Place the split just before the hours heading so long role labels survive.
+    boundary = line[label_end].x0 - 8
+    centers = [(2 * boundary - line[hours].x, "position_original"),
+               (line[hours].x, "hours"), (line[rate].x, "rate"),
+               (sum(w.x for w in line[rate + 1:]) / len(line[rate + 1:]), "total_amount")]
+    explicit = False
+    for row in lines[index + 1:index + 17]:
+        if _section_heading(row) or re.match(r"^(?:TOTAL|SUBTOTAL|LABOU?R\s+(?:SUM|SUBTOTAL|TOTAL)|MARKUP)\b", _text(row), re.I):
+            break
+        if _row_rate_label(_split(row, centers)[0]):
+            explicit = True
+            break
+    if label == "datepersonnel" or explicit:
+        return "labor", centers, True
+    return None
+
+
 def _detect_header(lines, index):
     line = lines[index]
     keys = [_key(word.text) for word in line]
+    row_rate = _row_rate_header(lines, index)
+    if row_rate:
+        return row_rate
     if {"fwd", "ticket", "date", "area", "job", "description", "worker", "craft", "hours", "rate", "cost"}.issubset(keys):
         # Printed worker-detail ledger; retain contractor/date evidence rather
         # than deriving identities or rate types from a price match.
@@ -287,7 +350,8 @@ def _extract_known_tables(result, words, page_number, method, metadata, *, consu
         body = lines[index + 1:end]
         worker_ledger = "_fwd" in [field for _, field in centers]
         trade_table = [field for _, field in centers] == ["position_original", "hours", "rate", "extension_amount"]
-        if (method == "ocr" or kind == "unfamiliar" or trade_table or worker_ledger) and not _has_tabular_body(lines[index], body, centers):
+        row_rate_table = kind == "labor" and [field for _, field in centers] == ["position_original", "hours", "rate", "total_amount"]
+        if (method == "ocr" or kind == "unfamiliar" or trade_table or worker_ledger or row_rate_table) and not _has_tabular_body(lines[index], body, centers):
             continue
         table_id = f"p{page_number}-y{round(lines[index][0].y)}-{kind}"
         table = Table(table_id, page_number, kind, [field for _, field in centers], [],
@@ -306,6 +370,8 @@ def _extract_known_tables(result, words, page_number, method, metadata, *, consu
                 break
             if trade_table and re.match(r"^(?:FREIGHT|HARDCOSTS|RENTAL|MATERIALS?|EQUIPMENT)\b", upper):
                 break
+            if row_rate_table and (re.match(r"^(?:LABOU?R\s+(?:SUM|SUBTOTAL|TOTAL)|MARKUP|ESCALATION|TOWER\s+[A-Z]\s+ESCALATION|FREIGHT|RENTAL|MATERIALS?|EQUIPMENT)\b", upper) or _section_heading(line)):
+                break
             cells = _split(line, centers)
             if trade_table:
                 trade_values = dict(zip([field for _, field in centers], cells))
@@ -313,7 +379,21 @@ def _extract_known_tables(result, words, page_number, method, metadata, *, consu
                     continue
             table.rows.append(cells)
             values = {field: value for (_, field), value in zip(centers, cells) if not field.startswith("_")}
-            if kind == "labor":
+            if row_rate_table:
+                if consumed_rows is not None:
+                    consumed_rows.add(_source_line_key(line))
+                label = values.get("position_original", "")
+                parsed = _row_rate_label(label)
+                if not parsed:
+                    if any(c.isalpha() for c in label) and values.get("rate"):
+                        result.issue(page_number, "unresolved_rate_basis", "Confirm the explicit regular/overtime/double-time label; this row was not assigned a rate type.", table_id=table_id, row_index=row_index, raw=label)
+                    continue
+                role, basis, prefix = parsed
+                values = {"description": label, "position_original": role, "rate_basis_raw": basis,
+                          prefix + "_hours": values.get("hours", ""), prefix + "_rate": values.get("rate", ""),
+                          prefix + "_amount": values.get("total_amount", ""),
+                          "contractor": ""}
+            elif kind == "labor":
                 # Date-only group headings belong to the rows below, bounded by this table.
                 raw_date = values.get("work_start", "")
                 if DATE_RE.fullmatch(raw_date):
@@ -363,6 +443,8 @@ def _extract_known_tables(result, words, page_number, method, metadata, *, consu
                 result.issue(page_number, "trade_table_review_required",
                              "Confirm printed trade abbreviations, generic rate basis, and missing work dates against the source.",
                              table_id=table_id)
+            if row_rate_table:
+                result.issue(page_number, "row_rate_review_required", "Confirm the printed role, row-specific pay type, contractor and work dates against the source.", table_id=table_id)
             tables.append(table)
     return tables
 
@@ -496,7 +578,7 @@ def _printed_scan_words(page, *, labor_only=False):
             return []
     keys = {_key(word.text) for word in probe}
     if not ({"rate", "hrs", "hours", "price", "amount", "extension"} & keys) or not (
-        {"description", "rating", "quantity", "item", "classification", "trade"} & keys
+        {"description", "rating", "quantity", "item", "classification", "trade", "datepersonnel", "personnel", "laborclassification", "position"} & keys
     ):
         return []
     # Raster classification is deliberately not treated as proof that every value is printed.

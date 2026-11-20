@@ -6,6 +6,7 @@ export const labels: Record<string, string> = {
   rate: "Regular rate (source)",
   work_start: "Work start",
   work_end: "Work finish",
+  work_date_source: "Date source",
   worker_name: "Worker",
   description: "Description",
   record_id: "Record ID",
@@ -48,3 +49,21 @@ export const rateTypeLabel = (type: string) =>
     OT: "Overtime (OT)",
     DT: "Double time (DT)",
   })[type] || "Recheck required";
+
+export function withWorkDates(
+  row: Record<string, string>,
+  supplied: Record<string, string> = {},
+): Record<string, string> {
+  const start = supplied.work_start || row.work_start;
+  return {
+    ...row,
+    work_start: start,
+    work_end: supplied.work_end || row.work_end || start,
+    work_date_source:
+      supplied.work_start || supplied.work_end
+        ? "Reviewer entered"
+        : start
+          ? "Printed"
+          : "Missing — needs review",
+  };
+}

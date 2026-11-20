@@ -14,6 +14,7 @@ export default function SavedDocuments({
   onReview,
   onCheck,
   onDelete,
+  onDates,
   onUpload,
 }: {
   documents: SavedDocument[];
@@ -25,6 +26,7 @@ export default function SavedDocuments({
   onReview: (id: string) => void;
   onCheck: (ids: string[]) => void;
   onDelete: (id: string) => void;
+  onDates: (doc: SavedDocument) => void;
   onUpload: () => void;
 }) {
   const [search, setSearch] = useState("");
@@ -93,6 +95,13 @@ export default function SavedDocuments({
                 : ""}
             </p>
             <div className="saved-document-actions">
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => onDates(doc)}
+              >
+                Set work dates
+              </button>
               <button
                 className="secondary"
                 disabled={busy}

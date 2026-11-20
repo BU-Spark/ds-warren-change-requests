@@ -87,6 +87,37 @@ recoverable; confirmed deletions interrupted during metadata/file cleanup are
 finished on the next data request or server restart. The server does not modify
 historical findings in place or leave deleted-document findings in analytics.
 
+## Work dates: document, page, or selected rows
+
+Upload has an optional **Work start / Work finish** range. Enter both dates to
+fill extracted rows without work dates, or leave both blank and continue.
+Printed work dates and earlier reviewer dates are kept by default. Use actual
+work dates, rather than invoice, submission or approval dates. For one day,
+enter the same date in both fields.
+
+In document review, **Set document dates**, **Set dates for this page**, and
+**Set dates for selected rows** apply one range to the chosen scope. The dialog
+shows how many rows are affected; selected rows may span multiple pages. The
+**Set dates** action beside an individual row opens that row's date editor.
+Keep **Only fill rows missing work dates** checked to preserve existing dates;
+uncheck it to replace dates in the chosen scope. **Cancel** changes nothing.
+**Remove entered dates** returns those rows to printed dates or unresolved
+status when no dates were printed. Date edits never confirm source-table
+reviews or save extracted labor rows automatically.
+
+The review table and Saved data show comparison dates and their source:
+Printed, Reviewer entered, or Missing. Open a saved record to inspect original
+source values. Saved documents also has **Set work dates**; for partial saves,
+this covers the ready extraction including unsaved rows. Other saved documents
+use their accepted rows. The existing comparison-details editor still supports
+individual or bulk date corrections.
+
+Reviewer dates are persisted separately from the original extraction and CSV;
+source records and identifiers stay unchanged. New checks use the entered
+range, and affected historical checks are marked outdated without rewriting
+historical findings. Rerun the check after edits. Missing dates remain Needs
+review; a supplied range must be covered in full by the approved schedule.
+
 ## Crossed-out and replacement rates
 
 The current ingestion policy preserves original printed rates and excludes reviewer corrections. A PDF may therefore show an original rate crossed out with a green replacement while the checker still evaluates the original submission. A flagged original rate does not establish whether a later correction is correct.

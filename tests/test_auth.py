@@ -72,6 +72,11 @@ def test_protect_data_downloads_and_admin_routes(workspace):
     ):
         assert client.get(path).status_code == 401
     assert client.post("/api/sessions").status_code == 401
+    for path in (
+        "/api/sessions/sample/work-dates",
+        "/api/documents/sample/work-dates",
+    ):
+        assert client.post(path, json={"scope": "document"}).status_code == 401
     assert (
         client.request(
             "DELETE", "/api/documents/sample", json={"confirmation": "a" * 64}

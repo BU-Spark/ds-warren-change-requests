@@ -109,3 +109,54 @@
     flex-wrap: wrap;
   }
 }
+
+.work-date-panel,
+.upload-work-dates {
+  padding: 16px;
+  margin: 16px 0;
+  border: 1px solid var(--border, #dce3eb);
+  border-radius: 10px;
+  background: #f8fafc;
+  min-width: 0;
+}
+.work-date-panel p,
+.upload-work-dates p {
+  margin: 8px 0 12px;
+  color: #536477;
+}
+.upload-work-dates legend {
+  font-weight: 600;
+}
+.work-date-panel small,
+.upload-work-dates small {
+  display: block;
+  margin-top: 12px;
+  color: #536477;
+}
+.work-date-actions {
+  flex-wrap: wrap;
+}
+
+.work-dates-modal[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.work-dates-modal > header {
+  flex-shrink: 0;
+}
+.work-dates-form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.work-dates-content {
+  min-height: 0;
+  overflow-y: auto;
+}
+.work-dates-modal .work-date-actions {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 14px 20px;
+  background: white;
+}

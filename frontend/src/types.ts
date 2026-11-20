@@ -33,6 +33,7 @@ export type Session = {
   reviewed?: Record<string, string>;
   review_summary?: ReviewSummary;
   saved_ids?: string[];
+  comparison_details?: Record<string, Row>;
 };
 export type SavedDocument = {
   document_id: string;
